@@ -17,7 +17,7 @@ CITY_KEYBOARD = InlineKeyboardMarkup(
 )
 
 DEAL_KEYBOARD = InlineKeyboardMarkup(
-    [[InlineKeyboardButton("Аренда", callback_data="deal:rent"), InlineKeyboardButton("Покупка", callback_data="deal:sale")]]
+    [[InlineKeyboardButton("Аренда", callback_data="deal:rent"), InlineKeyboardButton("Покупка", callback_data="deal:buy")]]
 )
 
 

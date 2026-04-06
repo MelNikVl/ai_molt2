@@ -5,7 +5,6 @@ import logging
 import random
 import re
 from dataclasses import dataclass
-from typing import Any
 from urllib.parse import urlencode
 
 import httpx
@@ -16,7 +15,8 @@ from config import Settings, load_settings
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://krisha.kz"
-LISTINGS_PATH = "/arenda/kvartiry/{city}/"
+RENT_LISTINGS_PATH = "/arenda/kvartiry/{city}/"
+BUY_LISTINGS_PATH = "/prodazha/kvartiry/{city}/"
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -122,12 +122,39 @@ def _parse_card(card: Tag) -> Listing | None:
 
 
 
-def _build_search_url(settings: Settings) -> str:
-    base = f"{BASE_URL}{LISTINGS_PATH.format(city=settings.city)}"
-    params = {
-        "das[_sys.hasphoto]": 1,
-        "das[price][to]": settings.max_price,
-    }
+def _build_search_url(
+    settings: Settings,
+    deal_type: str,
+    price_min: int | None,
+    price_max: int | None,
+    area_min: int | None,
+    area_max: int | None,
+) -> str:
+    normalized = deal_type.lower().strip()
+    if normalized in {"buy", "sale", "sell", "prodazha"}:
+        path = BUY_LISTINGS_PATH
+        default_price_min = 10_000_000
+    else:
+        path = RENT_LISTINGS_PATH
+        default_price_min = None
+
+    base = f"{BASE_URL}{path.format(city=settings.city)}"
+
+    params: dict[str, int] = {"das[_sys.hasphoto]": 1}
+    if price_min is not None:
+        params["das[price][from]"] = price_min
+    elif default_price_min is not None:
+        params["das[price][from]"] = default_price_min
+
+    if price_max is not None:
+        params["das[price][to]"] = price_max
+    else:
+        params["das[price][to]"] = settings.max_price
+
+    if area_min is not None:
+        params["das[live.square][from]"] = area_min
+    if area_max is not None:
+        params["das[live.square][to]"] = area_max
 
     if settings.min_rooms == settings.max_rooms:
         params["das[live.rooms]"] = settings.max_rooms
@@ -135,9 +162,18 @@ def _build_search_url(settings: Settings) -> str:
     return f"{base}?{urlencode(params)}"
 
 
-async def parse_krisha(settings: Settings, limit: int | None = None) -> list[Listing]:
+async def parse_krisha(
+    settings: Settings,
+    limit: int | None = None,
+    deal_type: str | None = None,
+    price_min: int | None = None,
+    price_max: int | None = None,
+    area_min: int | None = None,
+    area_max: int | None = None,
+) -> list[Listing]:
     await asyncio.sleep(random.uniform(1.0, 3.0))
-    url = _build_search_url(settings)
+    resolved_deal_type = deal_type or settings.deal_type
+    url = _build_search_url(settings, resolved_deal_type, price_min, price_max, area_min, area_max)
 
     async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=30.0, follow_redirects=True) as client:
         for attempt in (1, 2):
@@ -172,7 +208,9 @@ async def parse_krisha(settings: Settings, limit: int | None = None) -> list[Lis
 
         if parsed.rooms is not None and not (settings.min_rooms <= parsed.rooms <= settings.max_rooms):
             continue
-        if parsed.price > settings.max_price:
+        if parsed.price > (price_max if price_max is not None else settings.max_price):
+            continue
+        if price_min is not None and parsed.price < price_min:
             continue
 
         listings.append(parsed)
@@ -185,7 +223,7 @@ async def parse_krisha(settings: Settings, limit: int | None = None) -> list[Lis
 async def _demo() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = load_settings()
-    listings = await parse_krisha(settings, limit=10)
+    listings = await parse_krisha(settings, limit=10, deal_type=settings.deal_type)
 
     if not listings:
         print("Объявления не найдены или сайт временно недоступен.")

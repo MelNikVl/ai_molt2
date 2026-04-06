@@ -5,6 +5,7 @@
 ## Возможности
 
 - Онбординг через inline-кнопки и шаги настройки фильтров (`/start`, `/settings`)
+- Поддержка типов сделки: аренда (`rent`) и покупка (`buy`)
 - Мультипользовательский режим (персональные фильтры)
 - Подписки по ролям:
   - role=1 → 1 день
@@ -54,6 +55,7 @@ ADMIN_TELEGRAM_ID=...
 ADMIN_PASSWORD=...
 CHECK_INTERVAL_MINUTES=15
 DB_PATH=krisha_bot/krisha.db
+DEAL_TYPE=rent
 TEST=false
 ```
 

@@ -11,6 +11,7 @@ class Settings:
     bot_token: str
     check_interval_minutes: int
     city: str
+    deal_type: str
     max_price: int
     min_rooms: int
     max_rooms: int
@@ -42,6 +43,7 @@ def load_settings() -> Settings:
         bot_token=bot_token,
         check_interval_minutes=int(os.getenv("CHECK_INTERVAL_MINUTES", "15")),
         city=os.getenv("CITY", "astana"),
+        deal_type=os.getenv("DEAL_TYPE", "rent"),
         max_price=int(os.getenv("MAX_PRICE", "200000")),
         min_rooms=int(os.getenv("MIN_ROOMS", "2")),
         max_rooms=int(os.getenv("MAX_ROOMS", "2")),

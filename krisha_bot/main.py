@@ -198,9 +198,24 @@ async def check_new_listings(app: Application) -> None:
             grouped[(user.city, user.deal_type, user.price_max)].append(user)
 
         for (city, deal_type, price_max), users in grouped.items():
-            local_settings = Settings(**{**asdict(settings), "city": city, "max_price": price_max})
-            listings = await parse_krisha(local_settings)
-            await db.log_event("parser", f"city={city} deal={deal_type} listings={len(listings)}")
+            price_min_values = [u.price_min for u in users if u.price_min is not None]
+            area_min_values = [u.area_min for u in users if u.area_min is not None]
+            area_max_values = [u.area_max for u in users if u.area_max is not None]
+
+            request_price_min = min(price_min_values) if price_min_values else None
+            request_area_min = min(area_min_values) if area_min_values else None
+            request_area_max = max(area_max_values) if area_max_values else None
+
+            local_settings = Settings(**{**asdict(settings), "city": city, "deal_type": deal_type, "max_price": price_max})
+            listings = await parse_krisha(
+                local_settings,
+                deal_type=deal_type,
+                price_min=request_price_min,
+                price_max=price_max,
+                area_min=request_area_min,
+                area_max=request_area_max,
+            )
+            await db.log_event("parser", f"city={city} deal_type={deal_type} listings={len(listings)}")
 
             for listing in listings:
                 await db.save_listing(listing, city=city, deal_type=deal_type)
@@ -261,7 +276,7 @@ async def test_mode_once(app: Application) -> None:
     first_user = users[0]
     settings: Settings = app.bot_data["settings"]
     local_settings = Settings(**{**asdict(settings), "city": first_user.city or settings.city, "max_price": first_user.price_max or settings.max_price})
-    listings = await parse_krisha(local_settings, limit=1)
+    listings = await parse_krisha(local_settings, limit=1, deal_type=first_user.deal_type or local_settings.deal_type, price_min=first_user.price_min, price_max=first_user.price_max, area_min=first_user.area_min, area_max=first_user.area_max)
     if listings:
         await send_new_listing(app, first_user.user_id, listings[0])
 
