@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Последние 100 событий</h2>
+<table>
+  <tr><th>ID</th><th>Type</th><th>Description</th><th>Created</th></tr>
+  {% for l in logs %}
+  <tr>
+    <td>{{ l[0] }}</td><td>{{ l[1] }}</td><td>{{ l[2] }}</td><td>{{ l[3] }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

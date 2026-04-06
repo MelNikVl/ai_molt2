@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Дашборд</h2>
+<ul>
+  <li>Всего пользователей: {{ stats.total_users }}</li>
+  <li>Активных: {{ stats.active_users }}</li>
+  <li>Новых за день: {{ stats.new_users_day }}</li>
+  <li>Объектов спарсено за сутки: {{ stats.parsed_today }}</li>
+  <li>Последний запуск парсера: {{ stats.last_parser }}</li>
+</ul>
+{% endblock %}
