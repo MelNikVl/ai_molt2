@@ -28,6 +28,28 @@ from parser import parse_krisha
 logger = logging.getLogger(__name__)
 
 
+CITY_ALIASES = {
+    "astana": {"астана", "astana", "нур-султан", "nur-sultan"},
+    "almaty": {"алматы", "almaty"},
+}
+
+
+def _matches_city(listing, city: str) -> bool:
+    city = city.lower().strip()
+    aliases = CITY_ALIASES.get(city)
+    if not aliases:
+        return True
+
+    haystack = f"{listing.address} {listing.title}".lower()
+    opposite_aliases = set().union(*[vals for key, vals in CITY_ALIASES.items() if key != city])
+
+    if any(alias in haystack for alias in aliases):
+        return True
+    if any(alias in haystack for alias in opposite_aliases):
+        return False
+    return True
+
+
 def _get_onboarding_store(context: ContextTypes.DEFAULT_TYPE) -> dict[int, dict]:
     return context.application.bot_data.setdefault("onboarding", {})
 
@@ -182,6 +204,8 @@ def _fits_user_filters(user: UserSettings, listing) -> bool:
         return False
     if user.price_max is not None and listing.price > user.price_max:
         return False
+    if user.city and not _matches_city(listing, user.city):
+        return False
     return True
 
 
@@ -282,7 +306,7 @@ async def test_mode_once(app: Application) -> None:
 
 
 async def run_admin_web(db: BotDB, settings: Settings) -> None:
-    app = create_admin_app(db, settings.admin_password)
+    app = create_admin_app(db, settings.admin_password, settings.bot_version)
     config = uvicorn.Config(app=app, host="0.0.0.0", port=8080, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()

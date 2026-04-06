@@ -19,6 +19,7 @@ class Settings:
     db_path: str
     admin_telegram_id: int
     admin_password: str
+    bot_version: str
 
 
 
@@ -51,4 +52,5 @@ def load_settings() -> Settings:
         db_path=os.getenv("DB_PATH", "krisha_bot/krisha.db"),
         admin_telegram_id=admin_telegram_id,
         admin_password=admin_password,
+        bot_version=os.getenv("BOT_VERSION", "0.1.0"),
     )

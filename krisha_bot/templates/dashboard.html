@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h2>Дашборд</h2>
+<p><strong>Версия бота:</strong> {{ bot_version }}</p>
 <ul>
   <li>Всего пользователей: {{ stats.total_users }}</li>
   <li>Активных: {{ stats.active_users }}</li>

@@ -56,6 +56,7 @@ ADMIN_PASSWORD=...
 CHECK_INTERVAL_MINUTES=15
 DB_PATH=krisha_bot/krisha.db
 DEAL_TYPE=rent
+BOT_VERSION=0.2.0
 TEST=false
 ```
 
@@ -91,4 +92,5 @@ python main.py
 - `/admin/users` — пользователи + продлить/блокировка
 - `/admin/subscriptions` — выдача подписки
 - `/admin/logs` — последние 100 событий
+- На дашборде отображается версия бота из `BOT_VERSION`
 

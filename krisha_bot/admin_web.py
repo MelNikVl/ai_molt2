@@ -7,7 +7,7 @@ from fastapi.templating import Jinja2Templates
 from db import BotDB
 
 
-def create_admin_app(db: BotDB, admin_password: str) -> FastAPI:
+def create_admin_app(db: BotDB, admin_password: str, bot_version: str) -> FastAPI:
     app = FastAPI(title="Krisha Bot Admin")
     templates = Jinja2Templates(directory="krisha_bot/templates")
 
@@ -37,7 +37,7 @@ def create_admin_app(db: BotDB, admin_password: str) -> FastAPI:
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
         stats = await db.get_dashboard_stats()
-        return templates.TemplateResponse("dashboard.html", {"request": request, "stats": stats})
+        return templates.TemplateResponse("dashboard.html", {"request": request, "stats": stats, "bot_version": bot_version})
 
     @app.get("/admin/users", response_class=HTMLResponse)
     async def users_page(request: Request):

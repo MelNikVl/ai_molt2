@@ -36,6 +36,20 @@ class Listing:
     published_at: str
 
 
+def _normalize_deal_type(deal_type: str) -> str:
+    normalized = deal_type.lower().strip()
+    if normalized in {"buy", "sale", "sell", "prodazha"}:
+        return "buy"
+    return "rent"
+
+
+def _validate_response_scope(final_url: str, city: str, deal_type: str) -> bool:
+    lowered = final_url.lower()
+    city_ok = f"/{city.lower()}/" in lowered
+    deal_ok = "/prodazha/" in lowered if _normalize_deal_type(deal_type) == "buy" else "/arenda/" in lowered
+    return city_ok and deal_ok
+
+
 
 def _extract_price(value: str) -> int | None:
     digits = re.sub(r"[^\d]", "", value)
@@ -130,8 +144,8 @@ def _build_search_url(
     area_min: int | None,
     area_max: int | None,
 ) -> str:
-    normalized = deal_type.lower().strip()
-    if normalized in {"buy", "sale", "sell", "prodazha"}:
+    normalized = _normalize_deal_type(deal_type)
+    if normalized == "buy":
         path = BUY_LISTINGS_PATH
         default_price_min = 10_000_000
     else:
@@ -183,6 +197,14 @@ async def parse_krisha(
                     logger.warning("Krisha blocked this round with status %s", response.status_code)
                     return []
                 response.raise_for_status()
+                if not _validate_response_scope(str(response.url), settings.city, resolved_deal_type):
+                    logger.warning(
+                        "Krisha response URL mismatch: requested city=%s deal=%s but got %s",
+                        settings.city,
+                        resolved_deal_type,
+                        response.url,
+                    )
+                    return []
                 break
             except httpx.HTTPStatusError:
                 if attempt == 2:
