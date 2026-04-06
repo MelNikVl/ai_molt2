@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Пользователи</h2>
+<table>
+  <tr>
+    <th>ID</th><th>Username</th><th>Role</th><th>Subscription End</th><th>Фильтры</th><th>Blocked</th><th>Действия</th>
+  </tr>
+  {% for u in users %}
+  <tr>
+    <td>{{ u[0] }}</td>
+    <td>{{ u[1] }}</td>
+    <td>{{ u[2] }}</td>
+    <td>{{ u[3] }}</td>
+    <td>{{ u[4] }} / {{ u[5] }} / {{ u[6] }}-{{ u[7] }} / {{ u[8] }}-{{ u[9] }} / час {{ u[10] }}</td>
+    <td>{{ u[11] }}</td>
+    <td>
+      <form method="post" action="/admin/users/extend" style="display:inline">
+        <input type="hidden" name="user_id" value="{{ u[0] }}">
+        <select name="role"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
+        <button type="submit">Продлить</button>
+      </form>
+      <form method="post" action="/admin/users/block" style="display:inline">
+        <input type="hidden" name="user_id" value="{{ u[0] }}">
+        <input type="hidden" name="blocked" value="{{ 0 if u[11] else 1 }}">
+        <button type="submit">{{ 'Разблокировать' if u[11] else 'Заблокировать' }}</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}
