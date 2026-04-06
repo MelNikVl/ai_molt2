@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from typing import Any
 
 from db import UserSettings
 from parser import Listing
@@ -20,27 +20,73 @@ DEAL_KEYBOARD = InlineKeyboardMarkup(
     [[InlineKeyboardButton("Аренда", callback_data="deal:rent"), InlineKeyboardButton("Покупка", callback_data="deal:buy")]]
 )
 
+RENT_PRICE_KEYBOARD = InlineKeyboardMarkup(
+    [
+        [
+            InlineKeyboardButton("до 150 000", callback_data="price:0-150000"),
+            InlineKeyboardButton("150-250 000", callback_data="price:150000-250000"),
+        ],
+        [
+            InlineKeyboardButton("250-400 000", callback_data="price:250000-400000"),
+            InlineKeyboardButton("400 000+", callback_data="price:400000-0"),
+        ],
+        [InlineKeyboardButton("Свой диапазон", callback_data="price:custom")],
+    ]
+)
+
+BUY_PRICE_KEYBOARD = InlineKeyboardMarkup(
+    [
+        [
+            InlineKeyboardButton("до 30 млн", callback_data="price:0-30000000"),
+            InlineKeyboardButton("30-60 млн", callback_data="price:30000000-60000000"),
+        ],
+        [
+            InlineKeyboardButton("60-100 млн", callback_data="price:60000000-100000000"),
+            InlineKeyboardButton("100 млн+", callback_data="price:100000000-0"),
+        ],
+        [InlineKeyboardButton("Свой диапазон", callback_data="price:custom")],
+    ]
+)
+
+AREA_KEYBOARD = InlineKeyboardMarkup(
+    [
+        [
+            InlineKeyboardButton("до 50 м²", callback_data="area:0-50"),
+            InlineKeyboardButton("50-80 м²", callback_data="area:50-80"),
+        ],
+        [
+            InlineKeyboardButton("80-120 м²", callback_data="area:80-120"),
+            InlineKeyboardButton("120 м²+", callback_data="area:120-0"),
+        ],
+        [InlineKeyboardButton("Свой диапазон", callback_data="area:custom")],
+    ]
+)
+
 
 def _format_price(price: int) -> str:
     return f"{price:,}".replace(",", " ")
 
 
-async def send_onboarding_step(chat_id: int, step: int, context: Any) -> None:
+async def send_onboarding_step(chat_id: int, step: int, context: Any, state: dict | None = None) -> None:
     bot = context.bot
     if step == 1:
         await bot.send_message(chat_id=chat_id, text="Шаг 1/5: Выберите город", reply_markup=CITY_KEYBOARD)
     elif step == 2:
         await bot.send_message(chat_id=chat_id, text="Шаг 2/5: Выберите тип сделки", reply_markup=DEAL_KEYBOARD)
     elif step == 3:
-        await bot.send_message(chat_id=chat_id, text="Шаг 3/5: Введите диапазон цены: 100000-500000")
+        deal_type = (state or {}).get("deal_type", "rent")
+        keyboard = BUY_PRICE_KEYBOARD if deal_type == "buy" else RENT_PRICE_KEYBOARD
+        await bot.send_message(chat_id=chat_id, text="Шаг 3/5: Выберите диапазон цены", reply_markup=keyboard)
     elif step == 4:
-        await bot.send_message(chat_id=chat_id, text="Шаг 4/5: Введите диапазон метража (м²): 40-80")
+        await bot.send_message(chat_id=chat_id, text="Шаг 4/5: Выберите диапазон метража", reply_markup=AREA_KEYBOARD)
     elif step == 5:
         await bot.send_message(chat_id=chat_id, text="Шаг 5/5: Введите час ежедневной сводки (0-23, по Астане UTC+5)")
 
 
-async def send_new_listing(context: Any, user_id: int, listing: Listing) -> None:
-    title_line = f"🏠 *{listing.title} • {_format_price(listing.price)} ₸/мес*"
+async def send_new_listing(context: Any, user_id: int, listing: Listing, deal_type: str = "rent") -> None:
+    deal_label = "Покупка" if deal_type in {"buy", "sale"} else "Аренда"
+    price_suffix = "₸" if deal_type in {"buy", "sale"} else "₸/мес"
+    title_line = f"🏠 *[{deal_label}] {listing.title} • {_format_price(listing.price)} {price_suffix}*"
     text = (
         f"{title_line}\n"
         f"📍 {listing.address or 'Адрес не указан'}\n"

@@ -42,7 +42,7 @@ def load_settings() -> Settings:
 
     return Settings(
         bot_token=bot_token,
-        check_interval_minutes=int(os.getenv("CHECK_INTERVAL_MINUTES", "15")),
+        check_interval_minutes=int(os.getenv("CHECK_INTERVAL_MINUTES", "1")),
         city=os.getenv("CITY", "astana"),
         deal_type=os.getenv("DEAL_TYPE", "rent"),
         max_price=int(os.getenv("MAX_PRICE", "200000")),

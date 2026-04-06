@@ -160,14 +160,14 @@ def _build_search_url(
     elif default_price_min is not None:
         params["das[price][from]"] = default_price_min
 
-    if price_max is not None:
+    if price_max is not None and price_max > 0:
         params["das[price][to]"] = price_max
-    else:
+    elif price_max is None:
         params["das[price][to]"] = settings.max_price
 
     if area_min is not None:
         params["das[live.square][from]"] = area_min
-    if area_max is not None:
+    if area_max is not None and area_max > 0:
         params["das[live.square][to]"] = area_max
 
     if settings.min_rooms == settings.max_rooms:
@@ -230,7 +230,9 @@ async def parse_krisha(
 
         if parsed.rooms is not None and not (settings.min_rooms <= parsed.rooms <= settings.max_rooms):
             continue
-        if parsed.price > (price_max if price_max is not None else settings.max_price):
+        if price_max is not None and price_max > 0 and parsed.price > price_max:
+            continue
+        if price_max is None and parsed.price > settings.max_price:
             continue
         if price_min is not None and parsed.price < price_min:
             continue

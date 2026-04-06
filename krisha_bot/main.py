@@ -63,7 +63,7 @@ async def _start_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     store = _get_onboarding_store(context)
     store[user.id] = {"step": 1}
     await update.message.reply_text("Привет! Настроим фильтры поиска.")
-    await send_onboarding_step(user.id, 1, context)
+    await send_onboarding_step(user.id, 1, context, state=store[user.id])
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -119,14 +119,52 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         state["city"] = data.split(":", 1)[1]
         state["step"] = 2
         await query.edit_message_text(f"Город: {state['city']}")
-        await send_onboarding_step(user_id, 2, context)
+        await send_onboarding_step(user_id, 2, context, state=state)
         return
 
     if data.startswith("deal:"):
         state["deal_type"] = data.split(":", 1)[1]
         state["step"] = 3
         await query.edit_message_text(f"Тип сделки: {state['deal_type']}")
-        await send_onboarding_step(user_id, 3, context)
+        await send_onboarding_step(user_id, 3, context, state=state)
+        return
+
+    if data.startswith("price:"):
+        value = data.split(":", 1)[1]
+        if value == "custom":
+            state["step"] = "price_custom"
+            await query.edit_message_text("Цена: свой диапазон")
+            await context.bot.send_message(chat_id=user_id, text="Введите диапазон цены в формате 100000-500000")
+            return
+
+        bounds = _parse_range(value)
+        if not bounds:
+            await query.edit_message_text("Некорректный диапазон цены")
+            return
+
+        state["price_min"], state["price_max"] = bounds
+        state["step"] = 4
+        await query.edit_message_text(f"Цена: {state['price_min']}-{state['price_max']}")
+        await send_onboarding_step(user_id, 4, context, state=state)
+        return
+
+    if data.startswith("area:"):
+        value = data.split(":", 1)[1]
+        if value == "custom":
+            state["step"] = "area_custom"
+            await query.edit_message_text("Метраж: свой диапазон")
+            await context.bot.send_message(chat_id=user_id, text="Введите диапазон метража в формате 40-80")
+            return
+
+        bounds = _parse_range(value)
+        if not bounds:
+            await query.edit_message_text("Некорректный диапазон метража")
+            return
+
+        state["area_min"], state["area_max"] = bounds
+        state["step"] = 5
+        await query.edit_message_text(f"Метраж: {state['area_min']}-{state['area_max']}")
+        await send_onboarding_step(user_id, 5, context, state=state)
         return
 
     await db.log_event("warning", f"unknown callback user={user_id} data={data}")
@@ -138,6 +176,9 @@ def _parse_range(text: str) -> tuple[int, int] | None:
     if not match:
         return None
     left, right = int(match.group(1)), int(match.group(2))
+    # right=0 означает диапазон без верхней границы (например, 100 млн+)
+    if right == 0:
+        return left, 0
     if left > right:
         left, right = right, left
     return left, right
@@ -157,24 +198,24 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     step = state.get("step")
-    if step == 3:
+    if step == "price_custom":
         parsed = _parse_range(text)
         if not parsed:
             await update.message.reply_text("Формат цены: 100000-500000")
             return
         state["price_min"], state["price_max"] = parsed
         state["step"] = 4
-        await send_onboarding_step(user_id, 4, context)
+        await send_onboarding_step(user_id, 4, context, state=state)
         return
 
-    if step == 4:
+    if step == "area_custom":
         parsed = _parse_range(text)
         if not parsed:
             await update.message.reply_text("Формат метража: 40-80")
             return
         state["area_min"], state["area_max"] = parsed
         state["step"] = 5
-        await send_onboarding_step(user_id, 5, context)
+        await send_onboarding_step(user_id, 5, context, state=state)
         return
 
     if step == 5:
@@ -202,7 +243,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 def _fits_user_filters(user: UserSettings, listing) -> bool:
     if user.price_min is not None and listing.price < user.price_min:
         return False
-    if user.price_max is not None and listing.price > user.price_max:
+    if user.price_max is not None and user.price_max > 0 and listing.price > user.price_max:
         return False
     if user.city and not _matches_city(listing, user.city):
         return False
@@ -249,7 +290,7 @@ async def check_new_listings(app: Application) -> None:
                     sent = await db.is_user_notified_about_listing(user.user_id, listing.id)
                     if sent:
                         continue
-                    await send_new_listing(app, user.user_id, listing)
+                    await send_new_listing(app, user.user_id, listing, deal_type=user.deal_type or "rent")
                     await db.mark_user_listing_notified(user.user_id, listing.id)
 
     except Exception as exc:
@@ -302,7 +343,7 @@ async def test_mode_once(app: Application) -> None:
     local_settings = Settings(**{**asdict(settings), "city": first_user.city or settings.city, "max_price": first_user.price_max or settings.max_price})
     listings = await parse_krisha(local_settings, limit=1, deal_type=first_user.deal_type or local_settings.deal_type, price_min=first_user.price_min, price_max=first_user.price_max, area_min=first_user.area_min, area_max=first_user.area_max)
     if listings:
-        await send_new_listing(app, first_user.user_id, listings[0])
+        await send_new_listing(app, first_user.user_id, listings[0], deal_type=first_user.deal_type or "rent")
 
 
 async def run_admin_web(db: BotDB, settings: Settings) -> None:
@@ -330,7 +371,7 @@ async def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     scheduler = AsyncIOScheduler(timezone="UTC")
-    scheduler.add_job(check_new_listings, "interval", minutes=settings.check_interval_minutes, kwargs={"app": app})
+    scheduler.add_job(check_new_listings, "interval", minutes=1, kwargs={"app": app})
     scheduler.add_job(check_expired_subscriptions, "interval", minutes=10, kwargs={"app": app})
     scheduler.add_job(send_daily_reports, "interval", minutes=10, kwargs={"app": app})
     scheduler.start()
