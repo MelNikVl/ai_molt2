@@ -15,10 +15,22 @@ class Config:
 
 
 def load_config() -> Config:
-    load_dotenv()
+    # Try .env in current dir, then repo root, then krisha_bot/ subfolder
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for candidate in [
+        os.path.join(_root, ".env"),
+        os.path.join(_root, "krisha_bot", ".env"),
+        ".env",
+    ]:
+        if os.path.exists(candidate):
+            load_dotenv(candidate)
+            break
+    else:
+        load_dotenv()  # fallback: let python-dotenv search normally
+
     bot_token = os.getenv("BOT_TOKEN", "")
     if not bot_token:
-        raise ValueError("BOT_TOKEN is required in .env")
+        raise ValueError("BOT_TOKEN not found. Create .env with BOT_TOKEN=... (see .env.example)")
     return Config(
         bot_token=bot_token,
         db_path=os.getenv("DB_PATH", "bot.db"),
