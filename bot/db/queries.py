@@ -15,15 +15,17 @@ def _now() -> str:
 
 async def upsert_user(db_path: str, user_id: int, username: str | None) -> None:
     now = _now()
+    from datetime import timedelta
+    default_end = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
             """
-            INSERT INTO users(user_id, username, created_at, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO users(user_id, username, subscription_end, role, created_at, updated_at)
+            VALUES (?, ?, ?, 1, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET username = excluded.username,
                                                updated_at = excluded.updated_at
             """,
-            (user_id, username, now, now),
+            (user_id, username, default_end, now, now),
         )
         await db.commit()
 
