@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time as _time_module
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -18,6 +19,31 @@ if TYPE_CHECKING:
     from bot.db.compat import BotDB, UserSettings
 
 logger = logging.getLogger(__name__)
+
+# ── Rate limiter for krisha.kz requests ───────────────────────────────────────
+
+_krisha_rate_lock = asyncio.Lock()
+_krisha_last_ts: float = 0.0
+_KRISHA_MIN_GAP = 61.0  # seconds between requests to krisha.kz
+
+
+async def _rate_limited_parse(config: "Config", **kwargs: Any):
+    """Call parse_krisha with a rate limit of at most 1 request per _KRISHA_MIN_GAP seconds."""
+    global _krisha_last_ts
+    from bot.core.parser import parse_krisha
+
+    async with _krisha_rate_lock:
+        elapsed = _time_module.monotonic() - _krisha_last_ts
+        if elapsed < _KRISHA_MIN_GAP:
+            await asyncio.sleep(_KRISHA_MIN_GAP - elapsed)
+        result = await parse_krisha(config, **kwargs)
+        _krisha_last_ts = _time_module.monotonic()
+    return result
+
+
+# ── Adaptive frequency tracking ───────────────────────────────────────────────
+
+_empty_cycles: dict[tuple, int] = {}  # group_key -> consecutive empty cycles
 
 ASTANA_TZ = timezone(timedelta(hours=5))
 
@@ -135,8 +161,8 @@ async def _get_listing_coords(listing: Any, db_path: str) -> tuple[float, float]
 async def check_new_listings(bot: "Bot", db: "BotDB", config: "Config") -> None:
     """Fetch new listings for all active users and send notifications."""
     from bot.core.geo import within_radius
-    from bot.core.parser import parse_krisha
-    from bot.db.queries import get_users_with_location
+    from bot.db.queries import find_similar_photo_hash, get_users_with_location
+    from bot.db import queries as q
 
     try:
         active_users = await db.get_active_users()
@@ -151,6 +177,7 @@ async def check_new_listings(bot: "Bot", db: "BotDB", config: "Config") -> None:
         geo_by_id: dict[int, dict] = {u["user_id"]: u for u in geo_users}
 
         for (city, deal_type, price_max), users in grouped.items():
+            group_key = (city, deal_type, price_max)
             price_min_vals = [u.price_min for u in users if u.price_min is not None]
             area_min_vals = [u.area_min for u in users if u.area_min is not None]
             area_max_vals = [u.area_max for u in users if u.area_max is not None]
@@ -162,7 +189,7 @@ async def check_new_listings(bot: "Bot", db: "BotDB", config: "Config") -> None:
             from dataclasses import replace
             local_cfg = replace(config, city=city, deal_type=deal_type, max_price=price_max)
 
-            listings = await parse_krisha(
+            listings = await _rate_limited_parse(
                 local_cfg,
                 deal_type=deal_type,
                 price_min=req_price_min,
@@ -173,9 +200,27 @@ async def check_new_listings(bot: "Bot", db: "BotDB", config: "Config") -> None:
             )
             await db.log_event("parser", f"city={city} deal_type={deal_type} listings={len(listings)}")
 
+            new_notifications_count = 0
+
             for listing in listings:
+                # Photo hash deduplication against DB
+                if listing.photo_hash:
+                    similar_id = await find_similar_photo_hash(config.db_path, listing.photo_hash)
+                    if similar_id and similar_id != listing.id:
+                        logger.debug(
+                            "Visual duplicate skipped: listing=%s similar_to=%s",
+                            listing.id, similar_id,
+                        )
+                        continue
+
                 await db.save_listing(listing, city=city, deal_type=deal_type)
+
                 for user in users:
+                    # Check if user's notifications are paused
+                    user_data = await q.get_user(config.db_path, user.user_id)
+                    if user_data and user_data.get("is_paused"):
+                        continue
+
                     if not _fits_user_filters(user, listing):
                         continue
                     if await db.is_user_notified_about_listing(user.user_id, listing.id):
@@ -196,6 +241,13 @@ async def check_new_listings(bot: "Bot", db: "BotDB", config: "Config") -> None:
 
                     await _send_new_listing(bot, user.user_id, listing, deal_type=user.deal_type or "rent")
                     await db.mark_user_listing_notified(user.user_id, listing.id)
+                    new_notifications_count += 1
+
+            # Adaptive frequency: track empty cycles per group
+            if new_notifications_count == 0:
+                _empty_cycles[group_key] = _empty_cycles.get(group_key, 0) + 1
+            else:
+                _empty_cycles[group_key] = 0
 
     except Exception as exc:
         logger.exception("check_new_listings failed")
@@ -240,9 +292,99 @@ async def send_daily_reports(bot: "Bot", db: "BotDB") -> None:
         logger.exception("send_daily_reports failed")
 
 
+async def check_price_changes(bot: "Bot", db_path: str) -> None:
+    """
+    Check all followed listings for price drops (>=5%) and notify users.
+    Runs every 30 minutes via APScheduler.
+    """
+    from bot.db.queries import get_followed_listings_all, update_follow_price
+
+    try:
+        followed = await get_followed_listings_all(db_path)
+    except Exception:
+        logger.exception("check_price_changes: failed to fetch followed listings")
+        return
+
+    for follow in followed:
+        url = follow.get("url")
+        if not url:
+            continue
+
+        try:
+            import httpx
+            from bs4 import BeautifulSoup
+
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                resp = await client.get(url)
+            if resp.status_code != 200:
+                continue
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            price_tag = (
+                soup.select_one("div.offer__price")
+                or soup.select_one(".price")
+                or soup.select_one("[data-name='price']")
+                or soup.select_one(".a-price")
+            )
+            if not price_tag:
+                continue
+
+            import re
+            raw_price = re.sub(r"[^\d]", "", price_tag.get_text())
+            if not raw_price:
+                continue
+
+            new_price = int(raw_price)
+            old_price = follow.get("price_last_seen")
+            follow_id = follow.get("id")
+            user_id = follow.get("user_id")
+            title = follow.get("title") or "Объявление"
+
+            # Notify if price dropped by 5%+
+            if old_price and old_price > 0 and new_price < old_price * 0.95:
+                old_fmt = f"{old_price:,}".replace(",", "\u2009")
+                new_fmt = f"{new_price:,}".replace(",", "\u2009")
+                try:
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            f"📉 <b>Цена снизилась!</b>\n\n"
+                            f"{title}\n\n"
+                            f"Новая цена: <b>{new_fmt} ₸</b>\n"
+                            f"Было: {old_fmt} ₸\n\n"
+                            f"<a href='{url}'>Посмотреть объявление</a>"
+                        ),
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                    logger.info(
+                        "Price drop notification: user=%s follow=%s old=%s new=%s",
+                        user_id, follow_id, old_price, new_price,
+                    )
+                except Exception:
+                    logger.exception(
+                        "check_price_changes: failed to send notification user=%s", user_id
+                    )
+
+            # Always update price_last_seen
+            if follow_id is not None:
+                await update_follow_price(db_path, follow_id, new_price)
+
+        except Exception:
+            logger.exception("check_price_changes: error processing follow=%s url=%s", follow.get("id"), url)
+
+        # Rate limit: 1 request per 10 seconds
+        await asyncio.sleep(10)
+
+
 async def parser_loop(bot: "Bot", db: "BotDB", config: "Config") -> None:
-    """Run check_new_listings in an infinite loop with a random 1–5 min pause."""
+    """Run check_new_listings in an infinite loop with adaptive random delay."""
     while True:
-        delay = random.randint(60, 300)
+        max_empty = max(_empty_cycles.values(), default=0)
+        if max_empty >= 3:
+            delay = random.randint(600, 1200)  # 10–20 min
+            logger.info("Adaptive: slowing to %ds (all groups quiet)", delay)
+        else:
+            delay = random.randint(60, 300)  # 1–5 min
         await asyncio.sleep(delay)
         await check_new_listings(bot, db, config)

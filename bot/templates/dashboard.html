@@ -59,6 +59,21 @@
   </div>
 </div>
 
+<!-- DB info + quick links -->
+<div class="sec-head mt">
+  <h2>🔗 Быстрые ссылки</h2>
+</div>
+<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:20px;">
+  <a href="/admin/users/stats" class="btn btn-ghost">📈 Статистика пользователей</a>
+  <a href="/admin/parser/stats" class="btn btn-ghost">🤖 Статистика парсера</a>
+  <a href="/admin/issues" class="btn btn-ghost">⚠️ Ошибки парсера</a>
+</div>
+{% if stats.db_path %}
+<div class="text-sm text-muted" style="margin-bottom:20px;">
+  💾 <b>БД:</b> <code>{{ stats.db_path }}</code>
+</div>
+{% endif %}
+
 <!-- Mini log tail -->
 <div class="sec-head mt">
   <h2>📋 Последние логи <span class="text-muted text-sm">(5 мин)</span></h2>
