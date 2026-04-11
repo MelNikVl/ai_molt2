@@ -58,7 +58,7 @@ class BotDB:
 
     async def upsert_user(self, user_id: int, username: str | None) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        default_end = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        default_end = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
@@ -85,7 +85,7 @@ class BotDB:
             await db.execute(
                 """
                 UPDATE users
-                SET city=?, deal_type=?, price_min=?, price_max=?, area_min=?, area_max=?, daily_report_hour=?
+                SET city=?, deal_type=?, budget_min=?, budget_max=?, area_min=?, area_max=?, daily_report_hour=?
                 WHERE user_id=?
                 """,
                 (city, deal_type, price_min, price_max, area_min, area_max, daily_report_hour, user_id),
@@ -96,7 +96,8 @@ class BotDB:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT user_id, username, role, subscription_end, city, deal_type, price_min, price_max,
+                SELECT user_id, username, role, subscription_end, city, deal_type,
+                       budget_min as price_min, budget_max as price_max,
                        area_min, area_max, daily_report_hour, is_blocked
                 FROM users WHERE user_id=?
                 """,
@@ -112,7 +113,8 @@ class BotDB:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT user_id, username, role, subscription_end, city, deal_type, price_min, price_max,
+                SELECT user_id, username, role, subscription_end, city, deal_type,
+                       budget_min as price_min, budget_max as price_max,
                        area_min, area_max, daily_report_hour, is_blocked
                 FROM users
                 WHERE is_blocked=0
@@ -131,7 +133,8 @@ class BotDB:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT user_id, username, role, subscription_end, city, deal_type, price_min, price_max,
+                SELECT user_id, username, role, subscription_end, city, deal_type,
+                       budget_min as price_min, budget_max as price_max,
                        area_min, area_max, daily_report_hour, is_blocked
                 FROM users
                 WHERE is_blocked=0 AND subscription_end IS NOT NULL AND subscription_end <= ?
@@ -207,6 +210,7 @@ class BotDB:
             return await cursor.fetchall()
 
     async def get_dashboard_stats(self) -> dict[str, Any]:
+        from datetime import datetime, timedelta, timezone
         async with aiosqlite.connect(self.db_path) as db:
             now = datetime.now(timezone.utc)
             since_day = (now - timedelta(days=1)).isoformat()
@@ -238,50 +242,50 @@ class BotDB:
                 ).fetchone()
             )[0]
 
-        # Parse errors in last 24h
-        errors_24h = (
-            await (
-                await db.execute(
-                    "SELECT COUNT(*) FROM parse_errors WHERE ts >= ?", (since_day,)
-                )
-            ).fetchone()
-        )[0]
+            errors_24h = (
+                await (
+                    await db.execute(
+                        "SELECT COUNT(*) FROM parse_errors WHERE ts >= ?", (since_day,)
+                    )
+                ).fetchone()
+            )[0]
 
-        db_size_mb = round(os.path.getsize(self.db_path) / 1024 / 1024, 2) if os.path.exists(self.db_path) else 0
+            db_size_mb = round(os.path.getsize(self.db_path) / 1024 / 1024, 2) if os.path.exists(self.db_path) else 0
 
-        # Parser health: OK if last parse within 15 min
-        parser_ok: bool = False
-        if last_parser:
-            try:
-                from datetime import datetime, timezone
-                lp = datetime.fromisoformat(last_parser)
-                if lp.tzinfo is None:
-                    lp = lp.replace(tzinfo=timezone.utc)
-                parser_ok = (now - lp).total_seconds() < 900
-            except Exception:
-                pass
+            parser_ok: bool = False
+            if last_parser:
+                try:
+                    from datetime import datetime, timezone
+                    lp = datetime.fromisoformat(last_parser)
+                    if lp.tzinfo is None:
+                        lp = lp.replace(tzinfo=timezone.utc)
+                    parser_ok = (now - lp).total_seconds() < 900
+                except Exception:
+                    pass
 
-        return {
-            "total_users": total_users,
-            "active_users": active_users,
-            "new_users_day": new_day,
-            "parsed_today": parsed_today,
-            "last_parser": last_parser,
-            "total_listings": total_listings,
-            "req_total": req_total,
-            "req_10min": req_10min,
-            "db_size_mb": db_size_mb,
-            "parse_interval": "1–5 мин, случайный",
-            "errors_24h": errors_24h,
-            "parser_ok": parser_ok,
-        }
+            return {
+                "total_users": total_users,
+                "active_users": active_users,
+                "new_users_day": new_day,
+                "parsed_today": parsed_today,
+                "last_parser": last_parser,
+                "total_listings": total_listings,
+                "req_total": req_total,
+                "req_10min": req_10min,
+                "db_size_mb": db_size_mb,
+                "parse_interval": "1–5 мин, случайный",
+                "errors_24h": errors_24h,
+                "parser_ok": parser_ok,
+            }
 
     async def get_users_admin(self) -> list[tuple]:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
                 SELECT user_id, username, role, subscription_end,
-                       city, deal_type, price_min, price_max, area_min, area_max,
+                       city, deal_type,
+                       budget_min as price_min, budget_max as price_max,
+                       area_min, area_max,
                        daily_report_hour, is_blocked
                 FROM users
                 ORDER BY created_at DESC
