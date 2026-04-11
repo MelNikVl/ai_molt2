@@ -6,6 +6,8 @@ from typing import Any
 
 import aiosqlite
 
+from bot.core.dedup import _hash_distance
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -370,5 +372,109 @@ async def save_ai_explanation(
             VALUES (?,?,?,?)
             """,
             (listing_id, user_id, explanation, _now()),
+        )
+        await db.commit()
+
+
+# ── Photo hash deduplication ──────────────────────────────────────────────────
+
+async def find_similar_photo_hash(
+    db_path: str, photo_hash: str, threshold: int = 8
+) -> str | None:
+    """Return listing_id of an existing listing with similar photo hash, or None."""
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
+            "SELECT id, photo_hash FROM listings WHERE photo_hash IS NOT NULL"
+        )
+        rows = await cursor.fetchall()
+    for listing_id, existing_hash in rows:
+        dist = _hash_distance(photo_hash, existing_hash)
+        if dist is not None and dist <= threshold:
+            return listing_id
+    return None
+
+
+# ── User pause ────────────────────────────────────────────────────────────────
+
+async def set_user_paused(db_path: str, user_id: int, paused: bool) -> None:
+    """Set or clear the is_paused flag for a user."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "UPDATE users SET is_paused=? WHERE user_id=?",
+            (1 if paused else 0, user_id),
+        )
+        await db.commit()
+
+
+# ── Last sent listings ────────────────────────────────────────────────────────
+
+async def get_last_sent_listings(
+    db_path: str, user_id: int, n: int = 5
+) -> list[dict[str, Any]]:
+    """Return last n listings sent to this user (joins user_listing_notifications with listings)."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT l.id, l.title, l.price, l.address, l.url, n.notified_at
+            FROM user_listing_notifications n
+            JOIN listings l ON l.id = n.listing_id
+            WHERE n.user_id = ?
+            ORDER BY n.notified_at DESC
+            LIMIT ?
+            """,
+            (user_id, n),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Favorites paginated ───────────────────────────────────────────────────────
+
+async def get_favorites_paginated(
+    db_path: str, user_id: int, offset: int = 0, limit: int = 5
+) -> list[dict[str, Any]]:
+    """Return paginated favorites for a user."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT l.id, l.title, l.price, l.address, l.url
+            FROM favorites f
+            JOIN listings l ON l.id = f.listing_id
+            WHERE f.user_id = ?
+            ORDER BY f.saved_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id, limit, offset),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Followed listings for price monitoring ────────────────────────────────────
+
+async def get_followed_listings_all(db_path: str) -> list[dict[str, Any]]:
+    """Return all saved_searches with listing url/title joined."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT ss.id, ss.user_id, ss.listing_id, ss.price_last_seen,
+                   l.url, l.title
+            FROM saved_searches ss
+            JOIN listings l ON l.id = ss.listing_id
+            """
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def update_follow_price(db_path: str, follow_id: int, price: int) -> None:
+    """Update price_last_seen for a followed listing."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "UPDATE saved_searches SET price_last_seen=? WHERE id=?",
+            (price, follow_id),
         )
         await db.commit()
