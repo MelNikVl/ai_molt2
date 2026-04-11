@@ -260,6 +260,8 @@ async def cmd_help(message: Message) -> None:
         "/start — начало работы / онбординг\n"
         "/settings — изменить фильтры поиска\n"
         "/status — ваши текущие настройки\n"
+        "/location — поиск по радиусу от точки на карте\n"
+        "/nolocation — отключить фильтр по радиусу\n"
         "/help — эта справка",
         parse_mode="HTML",
     )

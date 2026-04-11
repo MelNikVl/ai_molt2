@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS users (
     area_max          REAL,
     daily_report_hour INTEGER,
     is_blocked        INTEGER DEFAULT 0,
+    -- geo / radius filter
+    location_lat      REAL,
+    location_lon      REAL,
+    radius_km         INTEGER,
     created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -49,7 +53,10 @@ CREATE TABLE IF NOT EXISTS listings (
     photo_hash    TEXT,
     published_at  TEXT,
     found_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    sources       TEXT
+    sources       TEXT,
+    -- geocoded coordinates (cached from Nominatim)
+    lat           REAL,
+    lon           REAL
 );
 
 CREATE TABLE IF NOT EXISTS favorites (
@@ -137,3 +144,19 @@ async def init_db(db_path: str) -> None:
             if stmt_clean:
                 await db.execute(stmt_clean)
         await db.commit()
+
+    # Migrations: add columns that may be absent in existing DBs
+    _migrations = [
+        ("users",    "location_lat",     "REAL"),
+        ("users",    "location_lon",     "REAL"),
+        ("users",    "radius_km",        "INTEGER"),
+        ("listings", "lat",              "REAL"),
+        ("listings", "lon",              "REAL"),
+    ]
+    async with aiosqlite.connect(db_path) as db:
+        for table, column, col_type in _migrations:
+            try:
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                await db.commit()
+            except Exception:
+                pass  # column already exists — that's fine

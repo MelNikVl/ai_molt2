@@ -303,6 +303,63 @@ async def get_ai_explanation(
     return row[0] if row else None
 
 
+# ── Geo / location ────────────────────────────────────────────────────────────
+
+async def save_user_location(
+    db_path: str,
+    user_id: int,
+    lat: float | None,
+    lon: float | None,
+    radius_km: int | None,
+) -> None:
+    """Save or clear the user's geo filter (lat=None clears it)."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "UPDATE users SET location_lat=?, location_lon=?, radius_km=? WHERE user_id=?",
+            (lat, lon, radius_km, user_id),
+        )
+        await db.commit()
+
+
+async def get_users_with_location(db_path: str) -> list[dict[str, Any]]:
+    """Return users that have a geo filter set and an active subscription."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM users
+            WHERE location_lat IS NOT NULL
+              AND location_lon IS NOT NULL
+              AND radius_km IS NOT NULL
+              AND deal_type IS NOT NULL
+              AND city IS NOT NULL
+            """
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def save_listing_coords(db_path: str, listing_id: str, lat: float, lon: float) -> None:
+    """Cache geocoded coordinates for a listing."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "UPDATE listings SET lat=?, lon=? WHERE id=?",
+            (lat, lon, listing_id),
+        )
+        await db.commit()
+
+
+async def get_listing_coords(db_path: str, listing_id: str) -> tuple[float, float] | None:
+    """Return cached (lat, lon) for a listing, or None if not yet geocoded."""
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
+            "SELECT lat, lon FROM listings WHERE id=? AND lat IS NOT NULL AND lon IS NOT NULL",
+            (listing_id,),
+        )
+        row = await cursor.fetchone()
+    return (row[0], row[1]) if row else None
+
+
 async def save_ai_explanation(
     db_path: str, listing_id: str, user_id: int, explanation: str
 ) -> None:

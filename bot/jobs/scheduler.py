@@ -108,9 +108,35 @@ async def _send_daily_report(bot: "Bot", user_id: int, rows: list[tuple]) -> Non
 
 # ─────────────────────────── scheduled tasks ──────────────────────────────────
 
+async def _get_listing_coords(listing: Any, db_path: str) -> tuple[float, float] | None:
+    """
+    Return (lat, lon) for a listing.
+    Tries the DB cache first; geocodes via Nominatim on cache miss and stores result.
+    """
+    from bot.core.geo import geocode
+    from bot.db.queries import get_listing_coords, save_listing_coords
+
+    # Check cache
+    cached = await get_listing_coords(db_path, listing.id)
+    if cached:
+        return cached
+
+    # Geocode — use district or full address
+    address = listing.district or listing.address
+    if not address:
+        return None
+
+    coords = await geocode(address)
+    if coords:
+        await save_listing_coords(db_path, listing.id, coords[0], coords[1])
+    return coords
+
+
 async def check_new_listings(bot: "Bot", db: "BotDB", config: "Config") -> None:
     """Fetch new listings for all active users and send notifications."""
+    from bot.core.geo import within_radius
     from bot.core.parser import parse_krisha
+    from bot.db.queries import get_users_with_location
 
     try:
         active_users = await db.get_active_users()
@@ -119,6 +145,10 @@ async def check_new_listings(bot: "Bot", db: "BotDB", config: "Config") -> None:
             if user.price_max is None or not user.city or not user.deal_type:
                 continue
             grouped[(user.city, user.deal_type, user.price_max)].append(user)
+
+        # Load geo-filter users (from the new aiogram schema)
+        geo_users = await get_users_with_location(config.db_path)
+        geo_by_id: dict[int, dict] = {u["user_id"]: u for u in geo_users}
 
         for (city, deal_type, price_max), users in grouped.items():
             price_min_vals = [u.price_min for u in users if u.price_min is not None]
@@ -129,7 +159,6 @@ async def check_new_listings(bot: "Bot", db: "BotDB", config: "Config") -> None:
             req_area_min = min(area_min_vals) if area_min_vals else None
             req_area_max = max(area_max_vals) if area_max_vals else None
 
-            # Build a temporary config override for this city/deal
             from dataclasses import replace
             local_cfg = replace(config, city=city, deal_type=deal_type, max_price=price_max)
 
@@ -151,6 +180,20 @@ async def check_new_listings(bot: "Bot", db: "BotDB", config: "Config") -> None:
                         continue
                     if await db.is_user_notified_about_listing(user.user_id, listing.id):
                         continue
+
+                    # Geo filter: if user has a radius set, check distance
+                    geo = geo_by_id.get(user.user_id)
+                    if geo and geo.get("location_lat") is not None:
+                        coords = await _get_listing_coords(listing, config.db_path)
+                        if coords:
+                            if not within_radius(
+                                geo["location_lat"], geo["location_lon"],
+                                float(geo["radius_km"]),
+                                coords[0], coords[1],
+                            ):
+                                continue
+                        # If geocoding failed, let the listing through (don't block it)
+
                     await _send_new_listing(bot, user.user_id, listing, deal_type=user.deal_type or "rent")
                     await db.mark_user_listing_notified(user.user_id, listing.id)
 

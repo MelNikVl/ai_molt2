@@ -22,6 +22,7 @@ from bot.config import load_config
 from bot.db.compat import BotDB
 from bot.db.models import init_db
 from bot.handlers import alerts as alerts_handler
+from bot.handlers import location as location_handler
 from bot.handlers import start as start_handler
 from bot.jobs.scheduler import check_expired_subscriptions, parser_loop, send_daily_reports
 
@@ -94,16 +95,17 @@ async def main() -> None:
 
     dp = Dispatcher(storage=MemoryStorage())
 
-    # Middleware: inject db_path + count requests
+    # Middleware: inject db_path + count requests (all relevant update types)
     db_mw = _make_db_middleware(cfg.db_path)
     counter_mw = _make_request_counter_middleware(compat_db)
-    for obs in (dp.message, dp.callback_query):
+    for obs in (dp.message, dp.callback_query, dp.edited_message):
         obs.middleware(db_mw)
         obs.outer_middleware(counter_mw)
 
     # Register routers
     dp.include_router(start_handler.router)
     dp.include_router(alerts_handler.router)
+    dp.include_router(location_handler.router)
 
     # APScheduler: subscription expiry + daily reports (every 10 min)
     scheduler = AsyncIOScheduler(timezone="UTC")
