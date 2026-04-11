@@ -238,7 +238,28 @@ class BotDB:
                 ).fetchone()
             )[0]
 
+        # Parse errors in last 24h
+        errors_24h = (
+            await (
+                await db.execute(
+                    "SELECT COUNT(*) FROM parse_errors WHERE ts >= ?", (since_day,)
+                )
+            ).fetchone()
+        )[0]
+
         db_size_mb = round(os.path.getsize(self.db_path) / 1024 / 1024, 2) if os.path.exists(self.db_path) else 0
+
+        # Parser health: OK if last parse within 15 min
+        parser_ok: bool = False
+        if last_parser:
+            try:
+                from datetime import datetime, timezone
+                lp = datetime.fromisoformat(last_parser)
+                if lp.tzinfo is None:
+                    lp = lp.replace(tzinfo=timezone.utc)
+                parser_ok = (now - lp).total_seconds() < 900
+            except Exception:
+                pass
 
         return {
             "total_users": total_users,
@@ -251,6 +272,8 @@ class BotDB:
             "req_10min": req_10min,
             "db_size_mb": db_size_mb,
             "parse_interval": "1–5 мин, случайный",
+            "errors_24h": errors_24h,
+            "parser_ok": parser_ok,
         }
 
     async def get_users_admin(self) -> list[tuple]:

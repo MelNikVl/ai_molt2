@@ -1,35 +1,128 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Дашборд</h2>
-<p><strong>Версия бота:</strong> {{ bot_version }}</p>
+<div class="page-title">
+  Дашборд
+  <small id="last-refresh">обновлено только что</small>
+</div>
 
-<h3>👥 Пользователи</h3>
-<ul>
-  <li>Всего пользователей: <strong>{{ stats.total_users }}</strong></li>
-  <li>Активных (с подпиской): <strong>{{ stats.active_users }}</strong></li>
-  <li>Новых за сутки: <strong>{{ stats.new_users_day }}</strong></li>
-</ul>
+<!-- Parser status banner -->
+<div id="parser-banner" style="
+  display:flex; align-items:center; gap:14px;
+  background:var(--surface); border:1px solid var(--border); border-radius:12px;
+  padding:16px 22px; margin-bottom:24px;
+">
+  <div id="parser-dot" class="dot {% if stats.parser_ok %}g{% else %}r{% endif %}" style="width:12px;height:12px;flex-shrink:0"></div>
+  <div>
+    <div style="font-size:14px;font-weight:600" id="parser-status-text">
+      {% if stats.parser_ok %}Парсер работает нормально{% else %}Парсер не отвечает{% endif %}
+    </div>
+    <div class="text-sm text-muted" id="parser-last">
+      Последний запуск: <strong>{{ stats.last_parser[:19] if stats.last_parser else "никогда" }}</strong>
+      &nbsp;·&nbsp; Интервал: {{ stats.parse_interval }}
+    </div>
+  </div>
+  <div style="margin-left:auto">
+    {% if stats.errors_24h > 0 %}
+    <a href="/admin/issues" class="badge r">⚠ {{ stats.errors_24h }} ошиб. за 24ч</a>
+    {% else %}
+    <span class="badge g">✓ Ошибок нет</span>
+    {% endif %}
+  </div>
+</div>
 
-<h3>🏠 Объявления</h3>
-<ul>
-  <li>Всего в базе: <strong>{{ stats.total_listings }}</strong></li>
-  <li>Спарсено за последние 24 ч: <strong>{{ stats.parsed_today }}</strong></li>
-  <li>Последний запуск парсера: <strong>{{ stats.last_parser or "—" }}</strong></li>
-  <li>Интервал парсинга: <strong>{{ stats.parse_interval }}</strong></li>
-</ul>
+<!-- Stat cards -->
+<div class="cards">
+  <div class="card p">
+    <div class="card-label">Пользователей</div>
+    <div class="card-value" id="v-total-users">{{ stats.total_users }}</div>
+    <div class="card-sub">активных: <strong id="v-active-users">{{ stats.active_users }}</strong></div>
+  </div>
+  <div class="card g">
+    <div class="card-label">Объявлений в БД</div>
+    <div class="card-value" id="v-total-listings">{{ stats.total_listings }}</div>
+    <div class="card-sub">за сутки: <strong id="v-parsed-today">{{ stats.parsed_today }}</strong></div>
+  </div>
+  <div class="card b">
+    <div class="card-label">Запросов боту</div>
+    <div class="card-value" id="v-req-10min">{{ stats.req_10min }}</div>
+    <div class="card-sub">за 10 мин &nbsp;·&nbsp; всего: <strong id="v-req-total">{{ stats.req_total }}</strong></div>
+  </div>
+  <div class="card y">
+    <div class="card-label">Размер БД</div>
+    <div class="card-value" id="v-db-size">{{ stats.db_size_mb }}</div>
+    <div class="card-sub">МБ на диске</div>
+  </div>
+  <div class="card r">
+    <div class="card-label">Новых пользов.</div>
+    <div class="card-value" id="v-new-users">{{ stats.new_users_day }}</div>
+    <div class="card-sub">за последние 24ч</div>
+  </div>
+</div>
 
-<h3>📨 Запросы к боту</h3>
-<ul>
-  <li>Всего запросов: <strong>{{ stats.req_total }}</strong></li>
-  <li>За последние 10 минут: <strong>{{ stats.req_10min }}</strong></li>
-</ul>
+<!-- Mini log tail -->
+<div class="sec-head mt">
+  <h2>📋 Последние логи <span class="text-muted text-sm">(5 мин)</span></h2>
+  <a href="/admin/logs" class="btn btn-ghost btn-sm">Открыть полностью →</a>
+</div>
+<div class="terminal" id="mini-log" style="height:180px">загрузка…</div>
 
-<h3>🗄 База данных</h3>
-<ul>
-  <li>Размер файла БД: <strong>{{ stats.db_size_mb }} МБ</strong></li>
-</ul>
+<script>
+async function refreshStats() {
+  try {
+    const r = await fetch('/admin/stats/data');
+    if (!r.ok) return;
+    const s = await r.json();
 
-<p style="margin-top:16px">
-  <a href="/admin/issues" style="color:#c0392b;font-weight:bold">⚠️ Ошибки парсинга</a>
-</p>
+    // cards
+    document.getElementById('v-total-users').textContent    = s.total_users;
+    document.getElementById('v-active-users').textContent   = s.active_users;
+    document.getElementById('v-total-listings').textContent = s.total_listings;
+    document.getElementById('v-parsed-today').textContent   = s.parsed_today;
+    document.getElementById('v-req-10min').textContent      = s.req_10min;
+    document.getElementById('v-req-total').textContent      = s.req_total;
+    document.getElementById('v-db-size').textContent        = s.db_size_mb;
+    document.getElementById('v-new-users').textContent      = s.new_users_day;
+
+    // parser status
+    const dot    = document.getElementById('parser-dot');
+    const stText = document.getElementById('parser-status-text');
+    const banner = document.getElementById('parser-banner');
+    dot.className = 'dot ' + (s.parser_ok ? 'g' : 'r');
+    dot.style.width = dot.style.height = '12px';
+    dot.style.flexShrink = '0';
+    stText.textContent = s.parser_ok ? 'Парсер работает нормально' : 'Парсер не отвечает';
+    const lp = document.getElementById('parser-last');
+    const last = s.last_parser ? s.last_parser.substring(0,19) : 'никогда';
+    lp.innerHTML = 'Последний запуск: <strong>' + last + '</strong> &nbsp;·&nbsp; Интервал: ' + s.parse_interval;
+
+    document.getElementById('last-refresh').textContent = 'обновлено ' + new Date().toLocaleTimeString();
+  } catch(e) {}
+}
+
+async function refreshMiniLog() {
+  try {
+    const r = await fetch('/admin/logs/data');
+    if (!r.ok) return;
+    const d = await r.json();
+    const box = document.getElementById('mini-log');
+    box.innerHTML = '';
+    (d.lines || []).slice(-12).forEach(ln => {
+      const span = document.createElement('span');
+      let cls = 'log-DEFAULT';
+      if (ln.includes(' ERROR '))   cls = 'log-ERROR';
+      else if (ln.includes(' WARNING ')) cls = 'log-WARNING';
+      else if (ln.includes(' INFO '))    cls = 'log-INFO';
+      span.className = cls;
+      span.textContent = ln + '\n';
+      box.appendChild(span);
+    });
+    box.scrollTop = box.scrollHeight;
+  } catch(e) {}
+}
+
+refreshStats();
+refreshMiniLog();
+setInterval(refreshStats,   15000);
+setInterval(refreshMiniLog, 5000);
+</script>
 {% endblock %}
