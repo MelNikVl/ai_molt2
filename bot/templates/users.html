@@ -1,31 +1,68 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Пользователи</h2>
+<div class="page-title">Пользователи <small>{{ users|length }} записей</small></div>
+
+<div class="tbl-wrap">
 <table>
-  <tr>
-    <th>ID</th><th>Username</th><th>Role</th><th>Subscription End</th><th>Фильтры</th><th>Blocked</th><th>Действия</th>
-  </tr>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Username</th>
+      <th>Роль</th>
+      <th>Подписка до</th>
+      <th>Фильтры</th>
+      <th>Статус</th>
+      <th>Действия</th>
+    </tr>
+  </thead>
+  <tbody>
   {% for u in users %}
   <tr>
-    <td>{{ u[0] }}</td>
-    <td>{{ u[1] }}</td>
-    <td>{{ u[2] }}</td>
-    <td>{{ u[3] }}</td>
-    <td>{{ u[4] }} / {{ u[5] }} / {{ u[6] }}-{{ u[7] }} / {{ u[8] }}-{{ u[9] }} / час {{ u[10] }}</td>
-    <td>{{ u[11] }}</td>
+    <td><code>{{ u[0] }}</code></td>
+    <td>{{ u[1] or "—" }}</td>
     <td>
-      <form method="post" action="/admin/users/extend" style="display:inline">
-        <input type="hidden" name="user_id" value="{{ u[0] }}">
-        <select name="role"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
-        <button type="submit">Продлить</button>
-      </form>
-      <form method="post" action="/admin/users/block" style="display:inline">
-        <input type="hidden" name="user_id" value="{{ u[0] }}">
-        <input type="hidden" name="blocked" value="{{ 0 if u[11] else 1 }}">
-        <button type="submit">{{ 'Разблокировать' if u[11] else 'Заблокировать' }}</button>
-      </form>
+      {% if u[2] == 3 %}<span class="badge b">PRO 30д</span>
+      {% elif u[2] == 2 %}<span class="badge g">7д</span>
+      {% else %}<span class="badge y">1д</span>{% endif %}
+    </td>
+    <td class="text-sm text-muted">{{ u[3][:10] if u[3] else "—" }}</td>
+    <td class="text-sm text-muted">
+      {{ u[4] or "?" }} · {{ u[5] or "?" }}<br>
+      <span style="font-size:11px">{{ u[6] or "0" }}–{{ u[7] or "∞" }} ₸ · {{ u[8] or "—" }}-{{ u[9] or "—" }} м²</span>
+    </td>
+    <td>
+      {% if u[11] %}
+        <span class="badge r">🔒 Заблокирован</span>
+      {% else %}
+        <span class="badge g">✓ Активен</span>
+      {% endif %}
+    </td>
+    <td>
+      <div class="flex gap" style="gap:6px">
+        <form method="post" action="/admin/users/extend">
+          <input type="hidden" name="user_id" value="{{ u[0] }}">
+          <select name="role" style="padding:4px 6px;font-size:12px;border-radius:6px">
+            <option value="1">1д</option>
+            <option value="2">7д</option>
+            <option value="3">30д</option>
+          </select>
+          <button type="submit" class="btn btn-ghost btn-sm">Продлить</button>
+        </form>
+        <form method="post" action="/admin/users/block">
+          <input type="hidden" name="user_id" value="{{ u[0] }}">
+          <input type="hidden" name="blocked" value="{{ 0 if u[11] else 1 }}">
+          <button type="submit" class="btn btn-sm {% if u[11] %}btn-ghost{% else %}btn-danger{% endif %}">
+            {{ "Разблок." if u[11] else "Блок." }}
+          </button>
+        </form>
+      </div>
     </td>
   </tr>
   {% endfor %}
+  {% if not users %}
+  <tr><td colspan="7" style="text-align:center;padding:40px;color:var(--muted)">Пользователей нет</td></tr>
+  {% endif %}
+  </tbody>
 </table>
+</div>
 {% endblock %}

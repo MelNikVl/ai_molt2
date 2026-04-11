@@ -1,47 +1,77 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>⚠️ Проблемы парсинга</h2>
-<p style="color:#888;font-size:13px">
-  Последние 50 ошибок парсера. Страница обновляется автоматически каждые 30 сек.
-</p>
+<div class="page-title">
+  Ошибки парсера
+  <small id="refresh-cnt">автообновление каждые 30 сек</small>
+</div>
 
-<form method="post" action="/admin/issues/clear" style="margin-bottom:12px"
-      onsubmit="return confirm('Очистить всю историю ошибок?')">
-  <button type="submit" style="
-    background:#e74c3c;color:white;border:none;
-    padding:8px 16px;border-radius:4px;cursor:pointer;font-size:14px
-  ">🗑 Очистить историю ошибок</button>
-</form>
+<div class="flex gap items-c" style="margin-bottom:20px">
+  {% if errors %}
+  <span class="badge r">⚠ {{ errors|length }} записей</span>
+  {% else %}
+  <span class="badge g">✓ Ошибок нет</span>
+  {% endif %}
+  <form method="post" action="/admin/issues/clear" style="margin-left:auto"
+        onsubmit="return confirm('Очистить всю историю ошибок?')">
+    <button type="submit" class="btn btn-danger btn-sm">🗑 Очистить историю</button>
+  </form>
+</div>
 
 {% if errors %}
-<p style="font-size:13px;color:#555">Найдено записей: <strong>{{ errors|length }}</strong></p>
+<div class="tbl-wrap">
 <table>
-  <tr>
-    <th>#</th>
-    <th>Время (UTC)</th>
-    <th>Тип ошибки</th>
-    <th>Сообщение</th>
-    <th>URL</th>
-  </tr>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Время (UTC)</th>
+      <th>Тип</th>
+      <th>Сообщение</th>
+      <th>URL</th>
+    </tr>
+  </thead>
+  <tbody>
   {% for e in errors %}
   <tr>
-    <td>{{ e[0] }}</td>
-    <td style="white-space:nowrap;font-size:12px">{{ e[1][:19] if e[1] else "—" }}</td>
-    <td><code style="color:#c0392b">{{ e[2] }}</code></td>
-    <td style="font-size:12px;max-width:400px;word-break:break-word">{{ e[3] }}</td>
-    <td style="font-size:12px">
+    <td class="text-muted text-sm">{{ e[0] }}</td>
+    <td style="white-space:nowrap;font-size:12px;color:var(--muted)">{{ e[1][:19] if e[1] else "—" }}</td>
+    <td>
+      {% set t = e[2] or "" %}
+      {% if "Blocked" in t or "429" in t %}
+        <span class="badge y">{{ t }}</span>
+      {% elif "Error" in t or "error" in t %}
+        <span class="badge r">{{ t }}</span>
+      {% else %}
+        <span class="badge b">{{ t }}</span>
+      {% endif %}
+    </td>
+    <td style="font-size:12px;max-width:420px;word-break:break-word;color:var(--muted)">{{ e[3] }}</td>
+    <td style="font-size:11px">
       {% if e[4] %}
-        <a href="{{ e[4] }}" target="_blank" style="word-break:break-all">{{ e[4][:60] }}{% if e[4]|length > 60 %}…{% endif %}</a>
+        <a href="{{ e[4] }}" target="_blank" style="color:var(--accent2);word-break:break-all">
+          {{ e[4][:55] }}{% if e[4]|length > 55 %}…{% endif %}
+        </a>
       {% else %}—{% endif %}
     </td>
   </tr>
   {% endfor %}
+  </tbody>
 </table>
+</div>
 {% else %}
-<p style="color:#27ae60;font-size:16px">✅ Ошибок парсинга не обнаружено.</p>
+<div style="text-align:center;padding:60px 20px;color:var(--muted)">
+  <div style="font-size:48px;margin-bottom:12px">✅</div>
+  <div style="font-size:16px;font-weight:600;color:var(--green)">Ошибок парсинга не обнаружено</div>
+  <div class="text-sm" style="margin-top:6px">Парсер работает без проблем</div>
+</div>
 {% endif %}
 
 <script>
-  setTimeout(function(){ location.reload(); }, 30000);
+let t=30;
+const cnt=document.getElementById('refresh-cnt');
+setInterval(()=>{
+  t--;
+  cnt.textContent='обновление через '+t+' сек';
+  if(t<=0){ location.reload(); }
+},1000);
 </script>
 {% endblock %}

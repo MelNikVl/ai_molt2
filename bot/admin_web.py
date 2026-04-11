@@ -97,6 +97,13 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str) -> FastAP
             return RedirectResponse(url="/admin/login", status_code=302)
         return templates.TemplateResponse("logs.html", {"request": request})
 
+    @app.get("/admin/stats/data")
+    async def stats_data(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        stats = await db.get_dashboard_stats()
+        return JSONResponse(stats)
+
     @app.get("/admin/logs/data")
     async def logs_data(request: Request):
         if not is_authed(request):
@@ -105,12 +112,25 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str) -> FastAP
         log_path = os.path.abspath(_LOG_FILE)
         if os.path.exists(log_path):
             try:
+                from datetime import datetime, timedelta, timezone
+                cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
                 with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()[-20:]
+                    raw = f.readlines()[-500:]  # read tail, then filter by time
+                filtered: list[str] = []
+                for ln in raw:
+                    # Try to parse timestamp from "2026-04-11 10:30:45,123 LEVEL ..."
+                    try:
+                        ts_str = ln[:23].replace(",", ".")
+                        ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=timezone.utc)
+                        if ts >= cutoff:
+                            filtered.append(ln)
+                    except Exception:
+                        filtered.append(ln)  # unparseable line — include it
+                lines = filtered[-50:] if filtered else raw[-20:]
             except OSError:
                 lines = ["[Не удалось прочитать файл лога]"]
         else:
-            lines = [f"[Файл {_LOG_FILE!r} не найден. Запустите бота чтобы создать лог-файл.]"]
+            lines = [f"[Файл {_LOG_FILE!r} не найден]"]
         return JSONResponse({"lines": [ln.rstrip("\n") for ln in lines]})
 
     @app.get("/admin/issues", response_class=HTMLResponse)
