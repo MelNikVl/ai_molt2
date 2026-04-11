@@ -1,5 +1,5 @@
 # Telegram bot
-aiogram==3.13.0
+aiogram==3.12.0
 
 # Database
 aiosqlite==0.20.0
