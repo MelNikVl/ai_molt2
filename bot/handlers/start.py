@@ -135,7 +135,6 @@ def _district_keyboard(city: str) -> InlineKeyboardMarkup:
 
 
 KB_PRIORITIES_BASE = [
-    ("🚇 Рядом со станцией ЛРТ", "lrt"),
     ("🏫 Рядом со школой", "school"),
     ("🔨 Без необходимости ремонта", "no_renovation"),
     ("👤 Только от собственника", "owner"),

@@ -1,3 +1,11 @@
+"""
+Compatibility DB layer.
+
+BotDB provides subscription management, scheduler helpers, admin-panel queries,
+and parse-error logging. This is the full database backend for the bot — it
+supplements the aiogram-specific tables in bot/db/models.py by also managing
+the legacy subscription/user-filter schema imported from the old krisha_bot.
+"""
 from __future__ import annotations
 
 import logging
@@ -5,10 +13,9 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import aiosqlite
-
-from parser import Listing
 
 logger = logging.getLogger(__name__)
 
@@ -37,82 +44,9 @@ class BotDB:
         self.db_path = db_path
 
     async def init(self) -> None:
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id INTEGER PRIMARY KEY,
-                    username TEXT,
-                    role INTEGER DEFAULT 1,
-                    subscription_end TIMESTAMP,
-                    city TEXT,
-                    deal_type TEXT,
-                    price_min INTEGER,
-                    price_max INTEGER,
-                    area_min INTEGER,
-                    area_max INTEGER,
-                    daily_report_hour INTEGER,
-                    is_blocked INTEGER DEFAULT 0,
-                    created_at TIMESTAMP
-                )
-                """
-            )
-            await db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS listings (
-                    id TEXT PRIMARY KEY,
-                    url TEXT,
-                    title TEXT,
-                    price INTEGER,
-                    area REAL,
-                    address TEXT,
-                    city TEXT,
-                    deal_type TEXT,
-                    found_at TIMESTAMP
-                )
-                """
-            )
-            await db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS user_listings (
-                    user_id INTEGER,
-                    listing_id TEXT,
-                    notified_at TIMESTAMP,
-                    PRIMARY KEY(user_id, listing_id)
-                )
-                """
-            )
-            await db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    type TEXT,
-                    description TEXT,
-                    created_at TIMESTAMP
-                )
-                """
-            )
-            await db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS bot_requests (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    ts TIMESTAMP
-                )
-                """
-            )
-            await db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS parse_errors (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts TIMESTAMP,
-                    error_type TEXT,
-                    message TEXT,
-                    url TEXT
-                )
-                """
-            )
-            await db.commit()
+        """Delegate all table creation to the unified models.init_db."""
+        from bot.db.models import init_db
+        await init_db(self.db_path)
 
     async def log_event(self, event_type: str, description: str) -> None:
         async with aiosqlite.connect(self.db_path) as db:
@@ -216,7 +150,7 @@ class BotDB:
             row = await cursor.fetchone()
         return row is not None
 
-    async def save_listing(self, listing: Listing, city: str, deal_type: str) -> None:
+    async def save_listing(self, listing: Any, city: str, deal_type: str) -> None:
         area = _extract_area_from_title(listing.title)
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -249,7 +183,6 @@ class BotDB:
     async def grant_subscription(self, user_id: int, role: int) -> str:
         if role not in ROLE_DAYS:
             raise ValueError("Role must be 1, 2, or 3")
-
         await self.upsert_user(user_id, None)
         end_date = datetime.now(timezone.utc) + timedelta(days=ROLE_DAYS[role])
         async with aiosqlite.connect(self.db_path) as db:
@@ -273,11 +206,12 @@ class BotDB:
             )
             return await cursor.fetchall()
 
-    async def get_dashboard_stats(self) -> dict[str, int | str | None]:
+    async def get_dashboard_stats(self) -> dict[str, Any]:
         async with aiosqlite.connect(self.db_path) as db:
             now = datetime.now(timezone.utc)
             since_day = (now - timedelta(days=1)).isoformat()
             now_iso = now.isoformat()
+
             total_users = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
             active_users = (
                 await (
@@ -294,15 +228,16 @@ class BotDB:
                 await (await db.execute("SELECT COUNT(*) FROM listings WHERE found_at >= ?", (since_day,))).fetchone()
             )[0]
             last_parser = (await (await db.execute("SELECT MAX(found_at) FROM listings")).fetchone())[0]
-        # Extended metrics
-        total_listings = (await (await db.execute("SELECT COUNT(*) FROM listings")).fetchone())[0]
-        since_10min = (now - timedelta(minutes=10)).isoformat()
-        req_total = (await (await db.execute("SELECT COUNT(*) FROM bot_requests")).fetchone())[0]
-        req_10min = (
-            await (
-                await db.execute("SELECT COUNT(*) FROM bot_requests WHERE ts >= ?", (since_10min,))
-            ).fetchone()
-        )[0]
+            total_listings = (await (await db.execute("SELECT COUNT(*) FROM listings")).fetchone())[0]
+
+            since_10min = (now - timedelta(minutes=10)).isoformat()
+            req_total = (await (await db.execute("SELECT COUNT(*) FROM bot_requests")).fetchone())[0]
+            req_10min = (
+                await (
+                    await db.execute("SELECT COUNT(*) FROM bot_requests WHERE ts >= ?", (since_10min,))
+                ).fetchone()
+            )[0]
+
         db_size_mb = round(os.path.getsize(self.db_path) / 1024 / 1024, 2) if os.path.exists(self.db_path) else 0
 
         return {
@@ -331,7 +266,9 @@ class BotDB:
             )
             return await cursor.fetchall()
 
-    async def get_user_daily_listings(self, user_id: int, day_start_utc: datetime, day_end_utc: datetime) -> list[tuple]:
+    async def get_user_daily_listings(
+        self, user_id: int, day_start_utc: datetime, day_end_utc: datetime
+    ) -> list[tuple]:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
@@ -353,7 +290,6 @@ class BotDB:
                 (f"%{marker}%",),
             )
             return await cursor.fetchone() is not None
-
 
     async def log_bot_request(self, user_id: int | None) -> None:
         async with aiosqlite.connect(self.db_path) as db:
