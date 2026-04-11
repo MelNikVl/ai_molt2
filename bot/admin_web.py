@@ -1,15 +1,26 @@
+"""
+Admin web panel (FastAPI + Jinja2).
+
+Migrated from krisha_bot/admin_web.py — updated to use bot.db.compat.BotDB
+and templates located in bot/templates/.
+"""
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from db import BotDB
+from bot.db.compat import BotDB
+
+_TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
+_LOG_FILE = "bot.log"
 
 
 def create_admin_app(db: BotDB, admin_password: str, bot_version: str) -> FastAPI:
     app = FastAPI(title="Krisha Bot Admin")
-    templates = Jinja2Templates(directory="krisha_bot/templates")
+    templates = Jinja2Templates(directory=_TEMPLATES_DIR)
 
     def is_authed(request: Request) -> bool:
         return request.cookies.get("admin_auth") == "1"
@@ -37,7 +48,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str) -> FastAP
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
         stats = await db.get_dashboard_stats()
-        return templates.TemplateResponse("dashboard.html", {"request": request, "stats": stats, "bot_version": bot_version})
+        return templates.TemplateResponse(
+            "dashboard.html", {"request": request, "stats": stats, "bot_version": bot_version}
+        )
 
     @app.get("/admin/users", response_class=HTMLResponse)
     async def users_page(request: Request):
@@ -69,7 +82,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str) -> FastAP
         return templates.TemplateResponse("subscriptions.html", {"request": request})
 
     @app.post("/admin/subscriptions")
-    async def subscriptions_submit(request: Request, user_id: int = Form(...), role: int = Form(...), days: int = Form(...)):
+    async def subscriptions_submit(
+        request: Request, user_id: int = Form(...), role: int = Form(...), days: int = Form(...)
+    ):
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
         end = await db.grant_subscription(user_id, role)
@@ -80,7 +95,36 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str) -> FastAP
     async def logs_page(request: Request):
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
-        logs = await db.get_recent_events(100)
-        return templates.TemplateResponse("logs.html", {"request": request, "logs": logs})
+        return templates.TemplateResponse("logs.html", {"request": request})
+
+    @app.get("/admin/logs/data")
+    async def logs_data(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        lines: list[str] = []
+        log_path = os.path.abspath(_LOG_FILE)
+        if os.path.exists(log_path):
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()[-20:]
+            except OSError:
+                lines = ["[Не удалось прочитать файл лога]"]
+        else:
+            lines = [f"[Файл {_LOG_FILE!r} не найден. Запустите бота чтобы создать лог-файл.]"]
+        return JSONResponse({"lines": [ln.rstrip("\n") for ln in lines]})
+
+    @app.get("/admin/issues", response_class=HTMLResponse)
+    async def issues_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        errors = await db.get_parse_errors(50)
+        return templates.TemplateResponse("issues.html", {"request": request, "errors": errors})
+
+    @app.post("/admin/issues/clear")
+    async def issues_clear(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        await db.clear_parse_errors()
+        return RedirectResponse(url="/admin/issues", status_code=302)
 
     return app

@@ -99,8 +99,42 @@ KB_MOVE_IN = _kb(
     [("Гибко / не тороплюсь", "ob:movein:flexible")],
 )
 
+# Astana districts for quick selection
+_ASTANA_DISTRICTS = [
+    ("Есиль (левый берег)", "ob:district:есиль"),
+    ("Алматы (правый берег)", "ob:district:алматы р-н"),
+    ("Сарыарка", "ob:district:сарыарка"),
+    ("Байконур", "ob:district:байконур"),
+]
+_ALMATY_DISTRICTS = [
+    ("Алмалинский", "ob:district:алмалинский"),
+    ("Бостандыкский", "ob:district:бостандыкский"),
+    ("Медеуский", "ob:district:медеуский"),
+    ("Ауэзовский", "ob:district:ауэзовский"),
+]
+
+
+def _district_keyboard(city: str) -> InlineKeyboardMarkup:
+    """Build a district keyboard appropriate for the given city."""
+    if city in ("astana", "астана"):
+        districts = _ASTANA_DISTRICTS
+    elif city in ("almaty", "алматы"):
+        districts = _ALMATY_DISTRICTS
+    else:
+        districts = []
+
+    rows = []
+    # Two districts per row
+    for i in range(0, len(districts), 2):
+        pair = districts[i : i + 2]
+        rows.append([InlineKeyboardButton(text=label, callback_data=data) for label, data in pair])
+
+    rows.append([InlineKeyboardButton(text="🗺 Любой район", callback_data="ob:district:any")])
+    rows.append([InlineKeyboardButton(text="✏️ Ввести вручную", callback_data="ob:district:manual")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 KB_PRIORITIES_BASE = [
-    ("🚇 Рядом с метро", "metro"),
     ("🏫 Рядом со школой", "school"),
     ("🔨 Без необходимости ремонта", "no_renovation"),
     ("👤 Только от собственника", "owner"),
@@ -176,10 +210,47 @@ async def cmd_start(message: Message, state: FSMContext, db_path: str) -> None:
     await _start_onboarding(message, state, db_path)
 
 
+_KB_SETTINGS_GUARD = _kb(
+    [("⚙️ Изменить настройки", "ob:settings:change")],
+    [("✅ Оставить как есть", "ob:settings:keep")],
+)
+
+
 @router.message(Command("settings"))
 async def cmd_settings(message: Message, state: FSMContext, db_path: str) -> None:
-    await message.answer("Перезапускаем настройки…")
-    await _start_onboarding(message, state, db_path)
+    if not message.from_user:
+        return
+    user = await queries.get_user(db_path, message.from_user.id)
+    if user and user.get("deal_type"):
+        # Show guard: don't wipe settings accidentally
+        await message.answer(
+            "У вас уже есть сохранённые настройки. Что хотите сделать?",
+            reply_markup=_KB_SETTINGS_GUARD,
+            parse_mode="HTML",
+        )
+    else:
+        await _start_onboarding(message, state, db_path)
+
+
+@router.callback_query(F.data == "ob:settings:keep")
+async def cb_settings_keep(callback: CallbackQuery) -> None:
+    await callback.message.edit_text("✅ Настройки не изменены.")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "ob:settings:change")
+async def cb_settings_change(callback: CallbackQuery, state: FSMContext, db_path: str) -> None:
+    await callback.message.edit_text("Начинаем изменение настроек…")
+    if callback.from_user:
+        await queries.upsert_user(db_path, callback.from_user.id, callback.from_user.username)
+    await state.clear()
+    await state.set_state(OnboardingStates.deal_type)
+    await callback.message.answer(
+        "<b>Шаг 1 из 9:</b> Тип сделки",
+        reply_markup=KB_DEAL_TYPE,
+        parse_mode="HTML",
+    )
+    await callback.answer()
 
 
 @router.message(Command("help"))
@@ -189,6 +260,8 @@ async def cmd_help(message: Message) -> None:
         "/start — начало работы / онбординг\n"
         "/settings — изменить фильтры поиска\n"
         "/status — ваши текущие настройки\n"
+        "/location — поиск по радиусу от точки на карте\n"
+        "/nolocation — отключить фильтр по радиусу\n"
         "/help — эта справка",
         parse_mode="HTML",
     )
@@ -267,17 +340,17 @@ async def step_city_text(message: Message, state: FSMContext) -> None:
 
 async def _ask_district(msg_or_callback_msg: Any, state: FSMContext, city_label: str) -> None:
     await state.set_state(OnboardingStates.district)
-    district_suggestions = _kb(
-        [("Центр", "ob:district:центр"), ("Не важно", "ob:district:any")],
-    )
+    data = await state.get_data()
+    city = data.get("city", "")
+    keyboard = _district_keyboard(city)
     text = (
         f"✅ Город: <b>{city_label}</b>\n\n"
-        "<b>Шаг 3 из 9:</b> Укажите район (или введите текстом):"
+        "<b>Шаг 3 из 9:</b> Выберите район или введите вручную:"
     )
     try:
-        await msg_or_callback_msg.edit_text(text, reply_markup=district_suggestions, parse_mode="HTML")
+        await msg_or_callback_msg.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     except Exception:
-        await msg_or_callback_msg.answer(text, reply_markup=district_suggestions, parse_mode="HTML")
+        await msg_or_callback_msg.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 # ── Step 3: District ──────────────────────────────────────────────────────────
@@ -285,6 +358,15 @@ async def _ask_district(msg_or_callback_msg: Any, state: FSMContext, city_label:
 @router.callback_query(OnboardingStates.district, F.data.startswith("ob:district:"))
 async def step_district_kb(callback: CallbackQuery, state: FSMContext) -> None:
     district_code = callback.data.split(":", 2)[2]
+
+    if district_code == "manual":
+        await callback.message.edit_text(
+            "Введите название района (например: Есиль, Медеуский, Левый берег):",
+            parse_mode="HTML",
+        )
+        await callback.answer()
+        return
+
     district = None if district_code == "any" else district_code
     await state.update_data(district=district)
     await _ask_budget(callback.message, state, district or "любой")

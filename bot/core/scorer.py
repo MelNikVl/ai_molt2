@@ -192,12 +192,7 @@ def _priorities_score(listing: dict[str, Any], prefs: dict[str, Any]) -> tuple[i
     address = (listing.get("address") or "").lower()
     combined = f"{title} {address}"
 
-    if "metro" in priorities or "метро" in priorities:
-        if "метро" in combined or "metro" in combined:
-            score += 10
-            reasons.append("Рядом с метро")
-
-    if "school" in priorities or "школа" in priorities:
+    if "school" in priorities:
         if "школ" in combined:
             score += 5
             reasons.append("Рядом со школой")
