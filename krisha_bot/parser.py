@@ -4,13 +4,18 @@ import asyncio
 import logging
 import random
 import re
+import traceback
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 import httpx
 from bs4 import BeautifulSoup, Tag
 
 from config import Settings, load_settings
+
+if TYPE_CHECKING:
+    from db import BotDB
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +189,7 @@ async def parse_krisha(
     price_max: int | None = None,
     area_min: int | None = None,
     area_max: int | None = None,
+    db: "BotDB | None" = None,
 ) -> list[Listing]:
     await asyncio.sleep(random.uniform(1.0, 3.0))
     resolved_deal_type = deal_type or settings.deal_type
@@ -194,26 +200,31 @@ async def parse_krisha(
             try:
                 response = await client.get(url)
                 if response.status_code in (403, 429):
-                    logger.warning("Krisha blocked this round with status %s", response.status_code)
+                    msg = f"Krisha blocked with HTTP {response.status_code}"
+                    logger.warning(msg)
+                    if db:
+                        await db.log_parse_error("HTTPBlocked", msg, url)
                     return []
                 response.raise_for_status()
                 if not _validate_response_scope(str(response.url), settings.city, resolved_deal_type):
-                    logger.warning(
-                        "Krisha response URL mismatch: requested city=%s deal=%s but got %s",
-                        settings.city,
-                        resolved_deal_type,
-                        response.url,
-                    )
+                    msg = f"Response URL mismatch: city={settings.city} deal={resolved_deal_type} got={response.url}"
+                    logger.warning(msg)
+                    if db:
+                        await db.log_parse_error("URLMismatch", msg, url)
                     return []
                 break
-            except httpx.HTTPStatusError:
+            except httpx.HTTPStatusError as exc:
                 if attempt == 2:
                     logger.exception("HTTP error while loading krisha page")
+                    if db:
+                        await db.log_parse_error("HTTPStatusError", str(exc), url)
                     return []
                 await asyncio.sleep(5)
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
                 if attempt == 2:
                     logger.exception("Network error while loading krisha page")
+                    if db:
+                        await db.log_parse_error("NetworkError", str(exc), url)
                     return []
                 await asyncio.sleep(5)
 
@@ -224,17 +235,30 @@ async def parse_krisha(
 
     listings: list[Listing] = []
     for card in cards:
-        parsed = _parse_card(card)
+        try:
+            parsed = _parse_card(card)
+        except Exception as exc:
+            logger.exception("Error parsing card")
+            if db:
+                await db.log_parse_error("CardParseError", traceback.format_exc()[:500], url)
+            continue
+
         if not parsed:
             continue
 
-        if parsed.rooms is not None and not (settings.min_rooms <= parsed.rooms <= settings.max_rooms):
-            continue
-        if price_max is not None and price_max > 0 and parsed.price > price_max:
-            continue
-        if price_max is None and parsed.price > settings.max_price:
-            continue
-        if price_min is not None and parsed.price < price_min:
+        try:
+            if parsed.rooms is not None and not (settings.min_rooms <= parsed.rooms <= settings.max_rooms):
+                continue
+            if price_max is not None and price_max > 0 and parsed.price > price_max:
+                continue
+            if price_max is None and parsed.price > settings.max_price:
+                continue
+            if price_min is not None and parsed.price < price_min:
+                continue
+        except Exception as exc:
+            logger.exception("Error filtering listing id=%s", getattr(parsed, "id", "?"))
+            if db:
+                await db.log_parse_error("FilterError", str(exc), url)
             continue
 
         listings.append(parsed)

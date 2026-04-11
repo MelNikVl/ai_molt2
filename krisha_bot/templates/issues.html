@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>⚠️ Проблемы парсинга</h2>
+<p style="color:#888;font-size:13px">
+  Последние 50 ошибок парсера. Страница обновляется автоматически каждые 30 сек.
+</p>
+
+<form method="post" action="/admin/issues/clear" style="margin-bottom:12px"
+      onsubmit="return confirm('Очистить всю историю ошибок?')">
+  <button type="submit" style="
+    background:#e74c3c;color:white;border:none;
+    padding:8px 16px;border-radius:4px;cursor:pointer;font-size:14px
+  ">🗑 Очистить историю ошибок</button>
+</form>
+
+{% if errors %}
+<p style="font-size:13px;color:#555">Найдено записей: <strong>{{ errors|length }}</strong></p>
+<table>
+  <tr>
+    <th>#</th>
+    <th>Время (UTC)</th>
+    <th>Тип ошибки</th>
+    <th>Сообщение</th>
+    <th>URL</th>
+  </tr>
+  {% for e in errors %}
+  <tr>
+    <td>{{ e[0] }}</td>
+    <td style="white-space:nowrap;font-size:12px">{{ e[1][:19] if e[1] else "—" }}</td>
+    <td><code style="color:#c0392b">{{ e[2] }}</code></td>
+    <td style="font-size:12px;max-width:400px;word-break:break-word">{{ e[3] }}</td>
+    <td style="font-size:12px">
+      {% if e[4] %}
+        <a href="{{ e[4] }}" target="_blank" style="word-break:break-all">{{ e[4][:60] }}{% if e[4]|length > 60 %}…{% endif %}</a>
+      {% else %}—{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p style="color:#27ae60;font-size:16px">✅ Ошибок парсинга не обнаружено.</p>
+{% endif %}
+
+<script>
+  setTimeout(function(){ location.reload(); }, 30000);
+</script>
+{% endblock %}

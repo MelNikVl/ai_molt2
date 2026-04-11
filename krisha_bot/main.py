@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import re
 from collections import defaultdict
 from dataclasses import asdict
@@ -9,13 +10,14 @@ from datetime import datetime, timedelta, timezone
 
 import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -71,9 +73,27 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _start_onboarding(update, context, db)
 
 
+_SETTINGS_GUARD_KEYBOARD = InlineKeyboardMarkup(
+    [
+        [InlineKeyboardButton("⚙️ Изменить настройки", callback_data="settings:change")],
+        [InlineKeyboardButton("✅ Оставить как есть", callback_data="settings:keep")],
+    ]
+)
+
+
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db: BotDB = context.application.bot_data["db"]
-    await _start_onboarding(update, context, db)
+    user = update.effective_user
+    if not user:
+        return
+    existing = await db.get_user(user.id)
+    if existing and existing.city and existing.deal_type:
+        await update.message.reply_text(
+            "У вас уже есть сохранённые настройки. Что хотите сделать?",
+            reply_markup=_SETTINGS_GUARD_KEYBOARD,
+        )
+    else:
+        await _start_onboarding(update, context, db)
 
 
 async def grant_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -114,6 +134,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     await query.answer()
     data = query.data or ""
+
+    # /settings guard callbacks
+    if data == "settings:keep":
+        await query.edit_message_text("✅ Настройки не изменены.")
+        return
+
+    if data == "settings:change":
+        await query.edit_message_text("Начинаем изменение настроек…")
+        store[user_id] = {"step": 1}
+        await send_onboarding_step(user_id, 1, context, state=store[user_id])
+        return
 
     if data.startswith("city:"):
         state["city"] = data.split(":", 1)[1]
@@ -250,6 +281,14 @@ def _fits_user_filters(user: UserSettings, listing) -> bool:
     return True
 
 
+async def _parser_loop(app: Application) -> None:
+    """Run check_new_listings in an infinite loop with a random 1–5 min pause between runs."""
+    while True:
+        delay = random.randint(60, 300)
+        await asyncio.sleep(delay)
+        await check_new_listings(app)
+
+
 async def check_new_listings(app: Application) -> None:
     settings: Settings = app.bot_data["settings"]
     db: BotDB = app.bot_data["db"]
@@ -279,6 +318,7 @@ async def check_new_listings(app: Application) -> None:
                 price_max=price_max,
                 area_min=request_area_min,
                 area_max=request_area_max,
+                db=db,
             )
             await db.log_event("parser", f"city={city} deal_type={deal_type} listings={len(listings)}")
 
@@ -341,7 +381,7 @@ async def test_mode_once(app: Application) -> None:
     first_user = users[0]
     settings: Settings = app.bot_data["settings"]
     local_settings = Settings(**{**asdict(settings), "city": first_user.city or settings.city, "max_price": first_user.price_max or settings.max_price})
-    listings = await parse_krisha(local_settings, limit=1, deal_type=first_user.deal_type or local_settings.deal_type, price_min=first_user.price_min, price_max=first_user.price_max, area_min=first_user.area_min, area_max=first_user.area_max)
+    listings = await parse_krisha(local_settings, limit=1, deal_type=first_user.deal_type or local_settings.deal_type, price_min=first_user.price_min, price_max=first_user.price_max, area_min=first_user.area_min, area_max=first_user.area_max, db=db)
     if listings:
         await send_new_listing(app, first_user.user_id, listings[0], deal_type=first_user.deal_type or "rent")
 
@@ -353,8 +393,25 @@ async def run_admin_web(db: BotDB, settings: Settings) -> None:
     await server.serve()
 
 
+async def _log_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """TypeHandler: record every incoming update in bot_requests table."""
+    db: BotDB = context.application.bot_data["db"]
+    user_id = update.effective_user.id if update.effective_user else None
+    try:
+        await db.log_bot_request(user_id)
+    except Exception:
+        pass  # never crash the bot over metrics
+
+
 async def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler("bot.log", encoding="utf-8"),
+        ],
+    )
     settings = load_settings()
 
     db = BotDB(settings.db_path)
@@ -364,14 +421,17 @@ async def main() -> None:
     app.bot_data["db"] = db
     app.bot_data["settings"] = settings
 
+    # Request counter middleware (group -1 runs before all other handlers)
+    app.add_handler(TypeHandler(Update, _log_request), group=-1)
+
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CommandHandler("grant", grant_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
+    # Subscriptions and daily reports on fixed schedule
     scheduler = AsyncIOScheduler(timezone="UTC")
-    scheduler.add_job(check_new_listings, "interval", minutes=1, kwargs={"app": app})
     scheduler.add_job(check_expired_subscriptions, "interval", minutes=10, kwargs={"app": app})
     scheduler.add_job(send_daily_reports, "interval", minutes=10, kwargs={"app": app})
     scheduler.start()
@@ -383,7 +443,11 @@ async def main() -> None:
     if settings.test_mode:
         await test_mode_once(app)
 
-    await asyncio.gather(run_admin_web(db, settings))
+    # Start random-interval parser loop and admin web concurrently
+    await asyncio.gather(
+        run_admin_web(db, settings),
+        _parser_loop(app),
+    )
 
 
 if __name__ == "__main__":

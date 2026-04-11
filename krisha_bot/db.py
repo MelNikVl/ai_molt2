@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -88,6 +89,26 @@ class BotDB:
                     type TEXT,
                     description TEXT,
                     created_at TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bot_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    ts TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS parse_errors (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TIMESTAMP,
+                    error_type TEXT,
+                    message TEXT,
+                    url TEXT
                 )
                 """
             )
@@ -273,12 +294,28 @@ class BotDB:
                 await (await db.execute("SELECT COUNT(*) FROM listings WHERE found_at >= ?", (since_day,))).fetchone()
             )[0]
             last_parser = (await (await db.execute("SELECT MAX(found_at) FROM listings")).fetchone())[0]
+        # Extended metrics
+        total_listings = (await (await db.execute("SELECT COUNT(*) FROM listings")).fetchone())[0]
+        since_10min = (now - timedelta(minutes=10)).isoformat()
+        req_total = (await (await db.execute("SELECT COUNT(*) FROM bot_requests")).fetchone())[0]
+        req_10min = (
+            await (
+                await db.execute("SELECT COUNT(*) FROM bot_requests WHERE ts >= ?", (since_10min,))
+            ).fetchone()
+        )[0]
+        db_size_mb = round(os.path.getsize(self.db_path) / 1024 / 1024, 2) if os.path.exists(self.db_path) else 0
+
         return {
             "total_users": total_users,
             "active_users": active_users,
             "new_users_day": new_day,
             "parsed_today": parsed_today,
             "last_parser": last_parser,
+            "total_listings": total_listings,
+            "req_total": req_total,
+            "req_10min": req_10min,
+            "db_size_mb": db_size_mb,
+            "parse_interval": "1–5 мин, случайный",
         }
 
     async def get_users_admin(self) -> list[tuple]:
@@ -316,6 +353,36 @@ class BotDB:
                 (f"%{marker}%",),
             )
             return await cursor.fetchone() is not None
+
+
+    async def log_bot_request(self, user_id: int | None) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO bot_requests(user_id, ts) VALUES (?, ?)",
+                (user_id, datetime.now(timezone.utc).isoformat()),
+            )
+            await db.commit()
+
+    async def log_parse_error(self, error_type: str, message: str, url: str | None = None) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO parse_errors(ts, error_type, message, url) VALUES (?, ?, ?, ?)",
+                (datetime.now(timezone.utc).isoformat(), error_type, message, url or ""),
+            )
+            await db.commit()
+
+    async def get_parse_errors(self, limit: int = 50) -> list[tuple]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT id, ts, error_type, message, url FROM parse_errors ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+            return await cursor.fetchall()
+
+    async def clear_parse_errors(self) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM parse_errors")
+            await db.commit()
 
 
 def _extract_area_from_title(title: str) -> float | None:

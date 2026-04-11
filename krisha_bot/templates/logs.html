@@ -1,12 +1,49 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Последние 100 событий</h2>
-<table>
-  <tr><th>ID</th><th>Type</th><th>Description</th><th>Created</th></tr>
-  {% for l in logs %}
-  <tr>
-    <td>{{ l[0] }}</td><td>{{ l[1] }}</td><td>{{ l[2] }}</td><td>{{ l[3] }}</td>
-  </tr>
-  {% endfor %}
-</table>
+<h2>Логи бота (реальное время)</h2>
+<p style="color:#888;font-size:13px">Последние 20 строк из <code>bot.log</code>. Обновляется каждые 3 сек.</p>
+
+<div style="display:flex;gap:12px;align-items:center;margin-bottom:8px">
+  <span id="status" style="font-size:13px;color:#27ae60">● Подключено</span>
+  <label style="font-size:13px">
+    <input type="checkbox" id="autoscroll" checked> Авто-прокрутка вниз
+  </label>
+</div>
+
+<pre id="log-box" style="
+  background:#1e1e1e;
+  color:#d4d4d4;
+  padding:16px;
+  border-radius:6px;
+  font-size:12px;
+  line-height:1.6;
+  height:480px;
+  overflow-y:auto;
+  white-space:pre-wrap;
+  word-break:break-all;
+">[загрузка…]</pre>
+
+<script>
+  const box = document.getElementById('log-box');
+  const status = document.getElementById('status');
+  const autoscroll = document.getElementById('autoscroll');
+
+  async function fetchLogs() {
+    try {
+      const r = await fetch('/admin/logs/data');
+      if (!r.ok) { status.textContent = '● Ошибка ' + r.status; status.style.color='#e74c3c'; return; }
+      const data = await r.json();
+      box.textContent = data.lines.join('\n') || '[лог пуст]';
+      status.textContent = '● Обновлено ' + new Date().toLocaleTimeString();
+      status.style.color = '#27ae60';
+      if (autoscroll.checked) box.scrollTop = box.scrollHeight;
+    } catch(e) {
+      status.textContent = '● Нет соединения';
+      status.style.color = '#e74c3c';
+    }
+  }
+
+  fetchLogs();
+  setInterval(fetchLogs, 3000);
+</script>
 {% endblock %}

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from db import BotDB
+
+_LOG_FILE = "bot.log"
 
 
 def create_admin_app(db: BotDB, admin_password: str, bot_version: str) -> FastAPI:
@@ -80,7 +84,36 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str) -> FastAP
     async def logs_page(request: Request):
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
-        logs = await db.get_recent_events(100)
-        return templates.TemplateResponse("logs.html", {"request": request, "logs": logs})
+        return templates.TemplateResponse("logs.html", {"request": request})
+
+    @app.get("/admin/logs/data")
+    async def logs_data(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        lines: list[str] = []
+        log_path = os.path.abspath(_LOG_FILE)
+        if os.path.exists(log_path):
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()[-20:]
+            except OSError:
+                lines = ["[Не удалось прочитать файл лога]"]
+        else:
+            lines = [f"[Файл {_LOG_FILE!r} не найден. Запустите бота чтобы создать лог-файл.]"]
+        return JSONResponse({"lines": [l.rstrip("\n") for l in lines]})
+
+    @app.get("/admin/issues", response_class=HTMLResponse)
+    async def issues_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        errors = await db.get_parse_errors(50)
+        return templates.TemplateResponse("issues.html", {"request": request, "errors": errors})
+
+    @app.post("/admin/issues/clear")
+    async def issues_clear(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        await db.clear_parse_errors()
+        return RedirectResponse(url="/admin/issues", status_code=302)
 
     return app

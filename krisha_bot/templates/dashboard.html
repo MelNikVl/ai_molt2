@@ -2,11 +2,34 @@
 {% block content %}
 <h2>Дашборд</h2>
 <p><strong>Версия бота:</strong> {{ bot_version }}</p>
+
+<h3>👥 Пользователи</h3>
 <ul>
-  <li>Всего пользователей: {{ stats.total_users }}</li>
-  <li>Активных: {{ stats.active_users }}</li>
-  <li>Новых за день: {{ stats.new_users_day }}</li>
-  <li>Объектов спарсено за сутки: {{ stats.parsed_today }}</li>
-  <li>Последний запуск парсера: {{ stats.last_parser }}</li>
+  <li>Всего пользователей: <strong>{{ stats.total_users }}</strong></li>
+  <li>Активных (с подпиской): <strong>{{ stats.active_users }}</strong></li>
+  <li>Новых за сутки: <strong>{{ stats.new_users_day }}</strong></li>
 </ul>
+
+<h3>🏠 Объявления</h3>
+<ul>
+  <li>Всего в базе: <strong>{{ stats.total_listings }}</strong></li>
+  <li>Спарсено за последние 24 ч: <strong>{{ stats.parsed_today }}</strong></li>
+  <li>Последний запуск парсера: <strong>{{ stats.last_parser or "—" }}</strong></li>
+  <li>Интервал парсинга: <strong>{{ stats.parse_interval }}</strong></li>
+</ul>
+
+<h3>📨 Запросы к боту</h3>
+<ul>
+  <li>Всего запросов: <strong>{{ stats.req_total }}</strong></li>
+  <li>За последние 10 минут: <strong>{{ stats.req_10min }}</strong></li>
+</ul>
+
+<h3>🗄 База данных</h3>
+<ul>
+  <li>Размер файла БД: <strong>{{ stats.db_size_mb }} МБ</strong></li>
+</ul>
+
+<p style="margin-top:16px">
+  <a href="/admin/issues" style="color:#c0392b;font-weight:bold">⚠️ Ошибки парсинга</a>
+</p>
 {% endblock %}
