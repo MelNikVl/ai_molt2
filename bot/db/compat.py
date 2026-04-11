@@ -351,7 +351,7 @@ class BotDB:
             await db.commit()
 
     async def get_per_user_stats(self) -> list[dict[str, Any]]:
-        """Per-user stats: user_id, username, city, deal_type, budget_max, listings_total, listings_24h, last_active."""
+        """Per-user stats including owner_only and property_type filters."""
         from datetime import datetime, timedelta, timezone
         since_day = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
@@ -364,6 +364,8 @@ class BotDB:
                     u.city,
                     u.deal_type,
                     u.budget_max,
+                    u.owner_only,
+                    u.property_type,
                     (SELECT COUNT(*) FROM user_listings ul WHERE ul.user_id = u.user_id) AS listings_total,
                     (SELECT COUNT(*) FROM user_listings ul
                      WHERE ul.user_id = u.user_id AND ul.notified_at >= ?) AS listings_24h,

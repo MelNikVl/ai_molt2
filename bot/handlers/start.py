@@ -39,6 +39,8 @@ class OnboardingStates(StatesGroup):
     area_min      = State()
     move_in       = State()
     priorities    = State()
+    owner_only    = State()
+    property_type = State()
     confirm       = State()
 
 
@@ -152,6 +154,18 @@ def _priorities_keyboard(selected: set[str]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+KB_OWNER_ONLY = _kb(
+    [("🏠 Только от хозяев", "ob:owner:1")],
+    [("🏢 Агентства тоже", "ob:owner:0")],
+    [("Не важно", "ob:owner:skip")],
+)
+
+KB_PROPERTY_TYPE = _kb(
+    [("🏗 Новостройка", "ob:proptype:new")],
+    [("🏛 Вторичка", "ob:proptype:secondary")],
+    [("Не важно", "ob:proptype:skip")],
+)
+
 KB_CONFIRM = _kb(
     [("✅ Сохранить", "ob:confirm:yes"), ("🔄 Начать заново", "ob:confirm:restart")],
 )
@@ -176,6 +190,17 @@ def _prefs_summary(data: dict[str, Any]) -> str:
     pri_labels = {k: l for l, k in KB_PRIORITIES_BASE}
     priorities = ", ".join(pri_labels[p] for p in (data.get("priorities_set") or set()) if p in pri_labels) or "не выбраны"
 
+    owner_val = data.get("owner_only")
+    if owner_val == 1:
+        owner_str = "только от хозяев"
+    elif owner_val == 0:
+        owner_str = "любой"
+    else:
+        owner_str = "не важно"
+
+    proptype_map = {"new": "Новостройка", "secondary": "Вторичка"}
+    proptype_str = proptype_map.get(data.get("property_type") or "", "не важно")
+
     return (
         f"<b>Тип сделки:</b> {deal}\n"
         f"<b>Город:</b> {city}\n"
@@ -184,7 +209,9 @@ def _prefs_summary(data: dict[str, Any]) -> str:
         f"<b>Комнат:</b> {rooms}\n"
         f"<b>Площадь:</b> {area}\n"
         f"<b>Заезд:</b> {movein}\n"
-        f"<b>Приоритеты:</b> {priorities}"
+        f"<b>Приоритеты:</b> {priorities}\n"
+        f"<b>Продавец:</b> {owner_str}\n"
+        f"<b>Тип жилья:</b> {proptype_str}"
     )
 
 
@@ -199,7 +226,7 @@ async def _start_onboarding(message: Message, state: FSMContext, db_path: str) -
     await state.set_state(OnboardingStates.deal_type)
     await message.answer(
         "Привет! Я помогу найти подходящую квартиру. Давайте настроим фильтры.\n\n"
-        "<b>Шаг 1 из 9:</b> Тип сделки",
+        "<b>Шаг 1 из 11:</b> Тип сделки",
         reply_markup=KB_DEAL_TYPE,
         parse_mode="HTML",
     )
@@ -246,7 +273,7 @@ async def cb_settings_change(callback: CallbackQuery, state: FSMContext, db_path
     await state.clear()
     await state.set_state(OnboardingStates.deal_type)
     await callback.message.answer(
-        "<b>Шаг 1 из 9:</b> Тип сделки",
+        "<b>Шаг 1 из 11:</b> Тип сделки",
         reply_markup=KB_DEAL_TYPE,
         parse_mode="HTML",
     )
@@ -296,6 +323,8 @@ async def _show_card(message: Message, db_path: str) -> None:
     area_min = user.get("area_min")
     move_in = user.get("move_in") or ""
     priorities = user.get("priorities") or []
+    owner_only = user.get("owner_only")
+    property_type = user.get("property_type") or ""
 
     movein_map = {"asap": "Как можно скорее", "1-3months": "1–3 месяца", "flexible": "Гибко"}
     movein_label = movein_map.get(move_in, move_in) if move_in else ""
@@ -309,6 +338,16 @@ async def _show_card(message: Message, db_path: str) -> None:
         bmax_s = f"{budget_max:,}".replace(",", "\u2009")
         budget_str = f"{bmin_s}–{bmax_s} ₸"
 
+    if owner_only == 1:
+        owner_str = "только от хозяев"
+    elif owner_only == 0:
+        owner_str = "агентства тоже"
+    else:
+        owner_str = "не важно"
+
+    proptype_map = {"new": "Новостройка", "secondary": "Вторичка"}
+    proptype_str = proptype_map.get(property_type, "не важно")
+
     lines = [
         "<b>📋 Ваш профиль поиска:</b>\n",
         f"{_flag(deal)} <b>Тип сделки:</b> {deal or '—'}",
@@ -319,6 +358,8 @@ async def _show_card(message: Message, db_path: str) -> None:
         f"{_flag(area_min)} <b>Площадь:</b> {f'от {area_min:.0f} м²' if area_min else '—'}",
         f"{_flag(move_in)} <b>Заезд:</b> {movein_label or '—'}",
         f"{_flag(priorities)} <b>Приоритеты:</b> {priorities_str or '—'}",
+        f"ℹ️ <b>Продавец:</b> {owner_str}",
+        f"ℹ️ <b>Тип жилья:</b> {proptype_str}",
     ]
 
     # Check if critical fields are missing — offer to fill
@@ -378,7 +419,7 @@ async def step_deal_type(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(OnboardingStates.city)
     label = "Аренда" if deal == "rent" else "Покупка"
     await callback.message.edit_text(
-        f"✅ Тип сделки: <b>{label}</b>\n\n<b>Шаг 2 из 9:</b> Выберите город",
+        f"✅ Тип сделки: <b>{label}</b>\n\n<b>Шаг 2 из 11:</b> Выберите город",
         reply_markup=KB_CITIES,
         parse_mode="HTML",
     )
@@ -422,7 +463,7 @@ async def _ask_district(msg_or_callback_msg: Any, state: FSMContext, city_label:
     keyboard = _district_keyboard(city)
     text = (
         f"✅ Город: <b>{city_label}</b>\n\n"
-        "<b>Шаг 3 из 9:</b> Выберите район или введите вручную:"
+        "<b>Шаг 3 из 11:</b> Выберите район или введите вручную:"
     )
     try:
         await msg_or_callback_msg.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
@@ -464,7 +505,7 @@ async def _ask_budget(msg: Any, state: FSMContext, district_label: str) -> None:
     await state.set_state(OnboardingStates.budget_max)
     text = (
         f"✅ Район: <b>{district_label}</b>\n\n"
-        "<b>Шаг 4 из 9:</b> Максимальный бюджет:"
+        "<b>Шаг 4 из 11:</b> Максимальный бюджет:"
     )
     try:
         await msg.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
@@ -511,7 +552,7 @@ async def _ask_budget_min(msg: Any, state: FSMContext, budget_max: int | None) -
     bmax_str = f"{budget_max:,}".replace(",", "\u2009") if budget_max else "без ограничений"
     text = (
         f"✅ Максимум: <b>{bmax_str} ₸</b>\n\n"
-        "<b>Шаг 5 из 9:</b> Минимальный бюджет (необязательно):"
+        "<b>Шаг 5 из 11:</b> Минимальный бюджет (необязательно):"
     )
     try:
         await msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -551,7 +592,7 @@ async def _ask_rooms(msg: Any, state: FSMContext) -> None:
     data = await state.get_data()
     await state.update_data(rooms_list=[])
     await state.set_state(OnboardingStates.rooms)
-    text = "<b>Шаг 6 из 9:</b> Выберите количество комнат (можно несколько, затем «Готово»):"
+    text = "<b>Шаг 6 из 11:</b> Выберите количество комнат (можно несколько, затем «Готово»):"
     try:
         await msg.edit_text(text, reply_markup=KB_ROOMS, parse_mode="HTML")
     except Exception:
@@ -594,7 +635,7 @@ async def step_rooms(callback: CallbackQuery, state: FSMContext) -> None:
     )
     selected_str = ", ".join(rooms_list) if rooms_list else "не выбрано"
     await callback.message.edit_text(
-        f"<b>Шаг 6 из 9:</b> Комнаты (выбрано: {selected_str}):",
+        f"<b>Шаг 6 из 11:</b> Комнаты (выбрано: {selected_str}):",
         reply_markup=kb,
         parse_mode="HTML",
     )
@@ -605,7 +646,7 @@ async def step_rooms(callback: CallbackQuery, state: FSMContext) -> None:
 
 async def _ask_area(msg: Any, state: FSMContext) -> None:
     await state.set_state(OnboardingStates.area_min)
-    text = "<b>Шаг 7 из 9:</b> Минимальная площадь:"
+    text = "<b>Шаг 7 из 11:</b> Минимальная площадь:"
     try:
         await msg.edit_text(text, reply_markup=KB_AREA, parse_mode="HTML")
     except Exception:
@@ -643,7 +684,7 @@ async def step_area_text(message: Message, state: FSMContext) -> None:
 async def _ask_move_in(msg: Any, state: FSMContext, area: float | None) -> None:
     await state.set_state(OnboardingStates.move_in)
     area_str = f"{area:.0f} м²" if area else "любая"
-    text = f"✅ Площадь: <b>от {area_str}</b>\n\n<b>Шаг 8 из 9:</b> Когда планируете заезд?"
+    text = f"✅ Площадь: <b>от {area_str}</b>\n\n<b>Шаг 8 из 11:</b> Когда планируете заезд?"
     try:
         await msg.edit_text(text, reply_markup=KB_MOVE_IN, parse_mode="HTML")
     except Exception:
@@ -660,7 +701,7 @@ async def step_move_in(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     priorities_set: set[str] = set(data.get("priorities_set") or [])
     await callback.message.edit_text(
-        "<b>Шаг 9 из 9:</b> Выберите приоритеты (необязательно):",
+        "<b>Шаг 9 из 11:</b> Выберите приоритеты (необязательно):",
         reply_markup=_priorities_keyboard(priorities_set),
         parse_mode="HTML",
     )
@@ -677,7 +718,7 @@ async def step_priorities(callback: CallbackQuery, state: FSMContext) -> None:
 
     if value == "done":
         await state.update_data(priorities_set=list(priorities_set))
-        await _show_confirm(callback.message, state)
+        await _ask_owner_only(callback.message, state)
         await callback.answer()
         return
 
@@ -689,10 +730,58 @@ async def step_priorities(callback: CallbackQuery, state: FSMContext) -> None:
 
     await state.update_data(priorities_set=list(priorities_set))
     await callback.message.edit_text(
-        "<b>Шаг 9 из 9:</b> Приоритеты (нажмите «Продолжить» когда готово):",
+        "<b>Шаг 9 из 11:</b> Приоритеты (нажмите «Продолжить» когда готово):",
         reply_markup=_priorities_keyboard(priorities_set),
         parse_mode="HTML",
     )
+    await callback.answer()
+
+
+# ── Step 10: Owner only ────────────────────────────────────────────────────────
+
+async def _ask_owner_only(msg: Any, state: FSMContext) -> None:
+    await state.set_state(OnboardingStates.owner_only)
+    text = "<b>Шаг 10 из 11:</b> От кого искать объявления?"
+    try:
+        await msg.edit_text(text, reply_markup=KB_OWNER_ONLY, parse_mode="HTML")
+    except Exception:
+        await msg.answer(text, reply_markup=KB_OWNER_ONLY, parse_mode="HTML")
+
+
+@router.callback_query(OnboardingStates.owner_only, F.data.startswith("ob:owner:"))
+async def step_owner_only(callback: CallbackQuery, state: FSMContext) -> None:
+    value = callback.data.split(":", 2)[2]
+    if value == "1":
+        await state.update_data(owner_only=1)
+    elif value == "0":
+        await state.update_data(owner_only=0)
+    else:  # skip
+        await state.update_data(owner_only=None)
+    await _ask_property_type(callback.message, state)
+    await callback.answer()
+
+
+# ── Step 11: Property type ─────────────────────────────────────────────────────
+
+async def _ask_property_type(msg: Any, state: FSMContext) -> None:
+    await state.set_state(OnboardingStates.property_type)
+    text = "<b>Шаг 11 из 11:</b> Тип жилья?"
+    try:
+        await msg.edit_text(text, reply_markup=KB_PROPERTY_TYPE, parse_mode="HTML")
+    except Exception:
+        await msg.answer(text, reply_markup=KB_PROPERTY_TYPE, parse_mode="HTML")
+
+
+@router.callback_query(OnboardingStates.property_type, F.data.startswith("ob:proptype:"))
+async def step_property_type(callback: CallbackQuery, state: FSMContext) -> None:
+    value = callback.data.split(":", 2)[2]
+    if value == "new":
+        await state.update_data(property_type="new")
+    elif value == "secondary":
+        await state.update_data(property_type="secondary")
+    else:  # skip
+        await state.update_data(property_type=None)
+    await _show_confirm(callback.message, state)
     await callback.answer()
 
 
@@ -728,7 +817,7 @@ async def step_confirm(callback: CallbackQuery, state: FSMContext, db_path: str)
             await queries.upsert_user(db_path, user.id, user.username)
         await state.set_state(OnboardingStates.deal_type)
         await callback.message.answer(
-            "<b>Шаг 1 из 9:</b> Тип сделки",
+            "<b>Шаг 1 из 11:</b> Тип сделки",
             reply_markup=KB_DEAL_TYPE,
             parse_mode="HTML",
         )
@@ -749,6 +838,8 @@ async def step_confirm(callback: CallbackQuery, state: FSMContext, db_path: str)
             "area_min": data.get("area_min"),
             "move_in": data.get("move_in"),
             "priorities": list(data.get("priorities_set") or []),
+            "owner_only": data.get("owner_only"),
+            "property_type": data.get("property_type"),
         }
         await queries.save_user_prefs(db_path, user_id, prefs)
 

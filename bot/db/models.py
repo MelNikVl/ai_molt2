@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS users (
     location_lat      REAL,
     location_lon      REAL,
     radius_km         INTEGER,
+    -- listing preference filters
+    owner_only        INTEGER,
+    property_type     TEXT,
     created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -156,6 +159,8 @@ async def init_db(db_path: str) -> None:
         ("listings",       "lon",               "REAL"),
         ("users",          "is_paused",         "INTEGER DEFAULT 0"),
         ("saved_searches", "price_last_seen",   "INTEGER"),
+        ("users",          "owner_only",         "INTEGER"),
+        ("users",          "property_type",      "TEXT"),
     ]
     async with aiosqlite.connect(db_path) as db:
         for table, column, col_type in _migrations:

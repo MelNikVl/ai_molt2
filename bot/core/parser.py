@@ -231,6 +231,8 @@ def _build_search_url(
     area_min: int | None,
     area_max: int | None,
     district_id: int | None = None,
+    owner_only: bool | None = None,
+    property_type: str | None = None,
 ) -> str:
     normalized = _normalize_deal_type(deal_type)
     if normalized == "buy":
@@ -264,6 +266,16 @@ def _build_search_url(
     if district_id is not None:
         params["das[district][0]"] = district_id
 
+    # Owner-only filter: das[who]=1 means "from owner only"
+    if owner_only:
+        params["das[who]"] = 1
+
+    # Property type: das[building.type][]=2 new, das[building.type][]=1 secondary
+    if property_type == "new":
+        params["das[building.type][]"] = 2
+    elif property_type == "secondary":
+        params["das[building.type][]"] = 1
+
     return f"{base}?{urlencode(params)}"
 
 
@@ -276,27 +288,34 @@ async def parse_krisha(
     area_min: int | None = None,
     area_max: int | None = None,
     district: str | None = None,
+    owner_only: bool | None = None,
+    property_type: str | None = None,
     db: "BotDB | None" = None,
 ) -> list[Listing]:
     """
     Fetch and parse listings from krisha.kz.
 
     Args:
-        config:     Bot configuration (city, deal_type, max_price, etc.)
-        limit:      Optional max number of listings to return.
-        deal_type:  Override config.deal_type.
-        price_min:  Min price filter.
-        price_max:  Max price filter.
-        area_min:   Min area filter (m²).
-        area_max:   Max area filter (m²).
-        district:   User's preferred district name (resolved to ID via city map).
-        db:         BotDB instance for error logging (optional).
+        config:        Bot configuration (city, deal_type, max_price, etc.)
+        limit:         Optional max number of listings to return.
+        deal_type:     Override config.deal_type.
+        price_min:     Min price filter.
+        price_max:     Max price filter.
+        area_min:      Min area filter (m²).
+        area_max:      Max area filter (m²).
+        district:      User's preferred district name (resolved to ID via city map).
+        owner_only:    If True, add das[who]=1 to filter owner-only listings.
+        property_type: 'new' or 'secondary' — adds das[building.type][] to URL.
+        db:            BotDB instance for error logging (optional).
     """
     await asyncio.sleep(random.uniform(1.0, 3.0))
     resolved_deal_type = deal_type or config.deal_type
 
     district_id = _resolve_district_id(config.city, district)
-    url = _build_search_url(config, resolved_deal_type, price_min, price_max, area_min, area_max, district_id)
+    url = _build_search_url(
+        config, resolved_deal_type, price_min, price_max, area_min, area_max,
+        district_id, owner_only=owner_only, property_type=property_type,
+    )
 
     async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=30.0, follow_redirects=True) as client:
         for attempt in (1, 2):

@@ -112,8 +112,13 @@ def build_card_text(listing: dict[str, Any], prefs: dict[str, Any] | None = None
     return "\n".join(lines)
 
 
-def build_card_keyboard(listing_id: str) -> InlineKeyboardMarkup:
+def build_card_keyboard(listing_id: str, url: str | None = None) -> InlineKeyboardMarkup:
     """Build the InlineKeyboardMarkup for a listing card."""
+    contact_btn = (
+        InlineKeyboardButton(text="📞 Связаться", url=url)
+        if url
+        else InlineKeyboardButton(text="📞 Связаться", callback_data=f"contact:{listing_id}")
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -122,7 +127,7 @@ def build_card_keyboard(listing_id: str) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="🔔 Следить", callback_data=f"follow:{listing_id}"),
-                InlineKeyboardButton(text="📞 Связаться", callback_data=f"contact:{listing_id}"),
+                contact_btn,
             ],
         ]
     )
@@ -146,7 +151,8 @@ async def send_listing_card(
 
     try:
         text = build_card_text(listing, prefs)
-        keyboard = build_card_keyboard(listing["id"])
+        listing_url = listing.get("url") or None
+        keyboard = build_card_keyboard(listing["id"], url=listing_url)
         photo_url = listing.get("photo_url")
 
         if photo_url:
@@ -162,13 +168,10 @@ async def send_listing_card(
             except Exception as exc:
                 logger.debug("Failed to send photo for listing %s: %s", listing.get("id"), exc)
 
-        # Fallback: text-only card
-        title = listing.get("title") or ""
-        url = listing.get("url") or ""
-        link_line = f'\n🔗 <a href="{url}">Смотреть объявление</a>' if url else ""
+        # Fallback: text-only card (URL available via "Связаться" inline button)
         await bot.send_message(
             chat_id=chat_id,
-            text=f"{text}{link_line}",
+            text=text,
             reply_markup=keyboard,
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
