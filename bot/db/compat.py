@@ -58,7 +58,7 @@ class BotDB:
 
     async def upsert_user(self, user_id: int, username: str | None) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        default_end = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        default_end = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
@@ -85,7 +85,7 @@ class BotDB:
             await db.execute(
                 """
                 UPDATE users
-                SET city=?, deal_type=?, price_min=?, price_max=?, area_min=?, area_max=?, daily_report_hour=?
+                SET city=?, deal_type=?, budget_min=?, budget_max=?, area_min=?, area_max=?, daily_report_hour=?
                 WHERE user_id=?
                 """,
                 (city, deal_type, price_min, price_max, area_min, area_max, daily_report_hour, user_id),
@@ -96,7 +96,8 @@ class BotDB:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT user_id, username, role, subscription_end, city, deal_type, price_min, price_max,
+                SELECT user_id, username, role, subscription_end, city, deal_type,
+                       budget_min as price_min, budget_max as price_max,
                        area_min, area_max, daily_report_hour, is_blocked
                 FROM users WHERE user_id=?
                 """,
@@ -112,7 +113,8 @@ class BotDB:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT user_id, username, role, subscription_end, city, deal_type, price_min, price_max,
+                SELECT user_id, username, role, subscription_end, city, deal_type,
+                       budget_min as price_min, budget_max as price_max,
                        area_min, area_max, daily_report_hour, is_blocked
                 FROM users
                 WHERE is_blocked=0
@@ -131,7 +133,8 @@ class BotDB:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT user_id, username, role, subscription_end, city, deal_type, price_min, price_max,
+                SELECT user_id, username, role, subscription_end, city, deal_type,
+                       budget_min as price_min, budget_max as price_max,
                        area_min, area_max, daily_report_hour, is_blocked
                 FROM users
                 WHERE is_blocked=0 AND subscription_end IS NOT NULL AND subscription_end <= ?
@@ -207,6 +210,7 @@ class BotDB:
             return await cursor.fetchall()
 
     async def get_dashboard_stats(self) -> dict[str, Any]:
+        from datetime import datetime, timedelta, timezone
         async with aiosqlite.connect(self.db_path) as db:
             now = datetime.now(timezone.utc)
             since_day = (now - timedelta(days=1)).isoformat()
@@ -282,7 +286,9 @@ class BotDB:
             cursor = await db.execute(
                 """
                 SELECT user_id, username, role, subscription_end,
-                       city, deal_type, price_min, price_max, area_min, area_max,
+                       city, deal_type,
+                       budget_min as price_min, budget_max as price_max,
+                       area_min, area_max,
                        daily_report_hour, is_blocked
                 FROM users
                 ORDER BY created_at DESC
