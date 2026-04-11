@@ -260,11 +260,88 @@ async def cmd_help(message: Message) -> None:
         "/start — начало работы / онбординг\n"
         "/settings — изменить фильтры поиска\n"
         "/status — ваши текущие настройки\n"
+        "/card — посмотреть заполненность профиля\n"
         "/location — поиск по радиусу от точки на карте\n"
         "/nolocation — отключить фильтр по радиусу\n"
         "/help — эта справка",
         parse_mode="HTML",
     )
+
+
+async def _show_card(message: Message, db_path: str) -> None:
+    """Show user's filter card with filled/missing field indicators."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    if not message.from_user:
+        return
+    user = await queries.get_user(db_path, message.from_user.id)
+
+    def _flag(val) -> str:
+        return "✅" if val else "❌"
+
+    if not user:
+        await message.answer(
+            "Профиль не найден. Используйте /start для регистрации.",
+            parse_mode="HTML",
+        )
+        return
+
+    deal_map = {"rent": "Аренда", "buy": "Покупка"}
+    deal = deal_map.get(user.get("deal_type", ""), user.get("deal_type") or "")
+    city = user.get("city") or ""
+    district = user.get("district") or ""
+    budget_min = user.get("budget_min")
+    budget_max = user.get("budget_max")
+    rooms = user.get("rooms") or []
+    area_min = user.get("area_min")
+    move_in = user.get("move_in") or ""
+    priorities = user.get("priorities") or []
+
+    movein_map = {"asap": "Как можно скорее", "1-3months": "1–3 месяца", "flexible": "Гибко"}
+    movein_label = movein_map.get(move_in, move_in) if move_in else ""
+
+    pri_labels = {k: lbl for lbl, k in KB_PRIORITIES_BASE}
+    priorities_str = ", ".join(pri_labels[p] for p in priorities if p in pri_labels) or ""
+
+    budget_str = ""
+    if budget_max:
+        bmin_s = f"{budget_min:,}".replace(",", "\u2009") if budget_min else "0"
+        bmax_s = f"{budget_max:,}".replace(",", "\u2009")
+        budget_str = f"{bmin_s}–{bmax_s} ₸"
+
+    lines = [
+        "<b>📋 Ваш профиль поиска:</b>\n",
+        f"{_flag(deal)} <b>Тип сделки:</b> {deal or '—'}",
+        f"{_flag(city)} <b>Город:</b> {city or '—'}",
+        f"{_flag(district)} <b>Район:</b> {district or 'любой'}",
+        f"{_flag(budget_max)} <b>Бюджет:</b> {budget_str or '—'}",
+        f"{_flag(rooms)} <b>Комнат:</b> {', '.join(str(r) for r in rooms) if rooms else '—'}",
+        f"{_flag(area_min)} <b>Площадь:</b> {f'от {area_min:.0f} м²' if area_min else '—'}",
+        f"{_flag(move_in)} <b>Заезд:</b> {movein_label or '—'}",
+        f"{_flag(priorities)} <b>Приоритеты:</b> {priorities_str or '—'}",
+    ]
+
+    # Check if critical fields are missing — offer to fill
+    missing_critical = not deal or not city or not budget_max
+    kb = None
+    if missing_critical:
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="✏️ Заполнить", callback_data="ob:settings:change")]
+            ]
+        )
+        lines.append("\n<i>Заполните обязательные поля для получения уведомлений.</i>")
+
+    await message.answer(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+
+
+@router.message(Command("card"))
+async def cmd_card(message: Message, db_path: str) -> None:
+    await _show_card(message, db_path)
 
 
 @router.message(Command("status"))
@@ -682,4 +759,6 @@ async def step_confirm(callback: CallbackQuery, state: FSMContext, db_path: str)
         "Для изменения настроек используйте /settings.",
         parse_mode="HTML",
     )
+    from bot.handlers.menu import MAIN_MENU
+    await callback.message.answer("Меню:", reply_markup=MAIN_MENU)
     await callback.answer("Настройки сохранены!")

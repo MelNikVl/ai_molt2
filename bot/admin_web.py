@@ -18,7 +18,7 @@ _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 _LOG_FILE = "bot.log"
 
 
-def create_admin_app(db: BotDB, admin_password: str, bot_version: str) -> FastAPI:
+def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: str = "") -> FastAPI:
     app = FastAPI(title="Krisha Bot Admin")
     templates = Jinja2Templates(directory=_TEMPLATES_DIR)
 
@@ -146,5 +146,29 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str) -> FastAP
             return RedirectResponse(url="/admin/login", status_code=302)
         await db.clear_parse_errors()
         return RedirectResponse(url="/admin/issues", status_code=302)
+
+    @app.get("/admin/users/stats", response_class=HTMLResponse)
+    async def users_stats_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        user_stats = await db.get_per_user_stats()
+        return templates.TemplateResponse(
+            "user_stats.html", {"request": request, "user_stats": user_stats}
+        )
+
+    @app.get("/admin/parser/stats", response_class=HTMLResponse)
+    async def parser_stats_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        cycle_info = await db.get_parser_cycle_info()
+        last_listings = await db.get_last_listings(20)
+        return templates.TemplateResponse(
+            "parser_stats.html",
+            {
+                "request": request,
+                "cycle_info": cycle_info,
+                "last_listings": last_listings,
+            },
+        )
 
     return app

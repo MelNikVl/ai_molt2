@@ -23,8 +23,9 @@ from bot.db.compat import BotDB
 from bot.db.models import init_db
 from bot.handlers import alerts as alerts_handler
 from bot.handlers import location as location_handler
+from bot.handlers import menu as menu_handler
 from bot.handlers import start as start_handler
-from bot.jobs.scheduler import check_expired_subscriptions, parser_loop, send_daily_reports
+from bot.jobs.scheduler import check_expired_subscriptions, check_price_changes, parser_loop, send_daily_reports
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +61,8 @@ def _make_request_counter_middleware(compat_db: BotDB):
     return RequestCounterMiddleware()
 
 
-async def _run_admin_web(compat_db: BotDB, admin_password: str, bot_version: str) -> None:
-    app = create_admin_app(compat_db, admin_password, bot_version)
+async def _run_admin_web(compat_db: BotDB, admin_password: str, bot_version: str, db_path: str) -> None:
+    app = create_admin_app(compat_db, admin_password, bot_version, db_path=db_path)
     config = uvicorn.Config(app=app, host="0.0.0.0", port=8080, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
@@ -104,6 +105,7 @@ async def main() -> None:
 
     # Register routers
     dp.include_router(start_handler.router)
+    dp.include_router(menu_handler.router)
     dp.include_router(alerts_handler.router)
     dp.include_router(location_handler.router)
 
@@ -117,13 +119,17 @@ async def main() -> None:
         send_daily_reports, "interval", minutes=10,
         kwargs={"bot": bot, "db": compat_db},
     )
+    scheduler.add_job(
+        check_price_changes, "interval", minutes=30,
+        kwargs={"bot": bot, "db_path": cfg.db_path},
+    )
     scheduler.start()
 
     logger.info("Starting bot polling…")
 
     await asyncio.gather(
         dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types()),
-        _run_admin_web(compat_db, cfg.admin_password, cfg.bot_version),
+        _run_admin_web(compat_db, cfg.admin_password, cfg.bot_version, cfg.db_path),
         parser_loop(bot, compat_db, cfg),
     )
 

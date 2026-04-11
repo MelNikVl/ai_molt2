@@ -242,41 +242,44 @@ class BotDB:
                 ).fetchone()
             )[0]
 
-            errors_24h = (
-                await (
-                    await db.execute(
-                        "SELECT COUNT(*) FROM parse_errors WHERE ts >= ?", (since_day,)
-                    )
-                ).fetchone()
-            )[0]
+        # Parse errors in last 24h
+        errors_24h = (
+            await (
+                await db.execute(
+                    "SELECT COUNT(*) FROM parse_errors WHERE ts >= ?", (since_day,)
+                )
+            ).fetchone()
+        )[0]
 
-            db_size_mb = round(os.path.getsize(self.db_path) / 1024 / 1024, 2) if os.path.exists(self.db_path) else 0
+        db_size_mb = round(os.path.getsize(self.db_path) / 1024 / 1024, 2) if os.path.exists(self.db_path) else 0
 
-            parser_ok: bool = False
-            if last_parser:
-                try:
-                    from datetime import datetime, timezone
-                    lp = datetime.fromisoformat(last_parser)
-                    if lp.tzinfo is None:
-                        lp = lp.replace(tzinfo=timezone.utc)
-                    parser_ok = (now - lp).total_seconds() < 900
-                except Exception:
-                    pass
+        # Parser health: OK if last parse within 15 min
+        parser_ok: bool = False
+        if last_parser:
+            try:
+                from datetime import datetime, timezone
+                lp = datetime.fromisoformat(last_parser)
+                if lp.tzinfo is None:
+                    lp = lp.replace(tzinfo=timezone.utc)
+                parser_ok = (now - lp).total_seconds() < 900
+            except Exception:
+                pass
 
-            return {
-                "total_users": total_users,
-                "active_users": active_users,
-                "new_users_day": new_day,
-                "parsed_today": parsed_today,
-                "last_parser": last_parser,
-                "total_listings": total_listings,
-                "req_total": req_total,
-                "req_10min": req_10min,
-                "db_size_mb": db_size_mb,
-                "parse_interval": "1–5 мин, случайный",
-                "errors_24h": errors_24h,
-                "parser_ok": parser_ok,
-            }
+        return {
+            "total_users": total_users,
+            "active_users": active_users,
+            "new_users_day": new_day,
+            "parsed_today": parsed_today,
+            "last_parser": last_parser,
+            "total_listings": total_listings,
+            "req_total": req_total,
+            "req_10min": req_10min,
+            "db_size_mb": db_size_mb,
+            "parse_interval": "1–5 мин, случайный",
+            "errors_24h": errors_24h,
+            "parser_ok": parser_ok,
+            "db_path": self.db_path,
+        }
 
     async def get_users_admin(self) -> list[tuple]:
         async with aiosqlite.connect(self.db_path) as db:
@@ -346,6 +349,69 @@ class BotDB:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("DELETE FROM parse_errors")
             await db.commit()
+
+    async def get_per_user_stats(self) -> list[dict[str, Any]]:
+        """Per-user stats: user_id, username, city, deal_type, budget_max, listings_total, listings_24h, last_active."""
+        from datetime import datetime, timedelta, timezone
+        since_day = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT
+                    u.user_id,
+                    u.username,
+                    u.city,
+                    u.deal_type,
+                    u.budget_max,
+                    (SELECT COUNT(*) FROM user_listings ul WHERE ul.user_id = u.user_id) AS listings_total,
+                    (SELECT COUNT(*) FROM user_listings ul
+                     WHERE ul.user_id = u.user_id AND ul.notified_at >= ?) AS listings_24h,
+                    u.updated_at AS last_active
+                FROM users u
+                ORDER BY listings_total DESC
+                """,
+                (since_day,),
+            )
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_last_listings(self, n: int = 20) -> list[tuple]:
+        """Last N listings found by parser, ordered by found_at DESC."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT id, title, price, address, city, deal_type, found_at
+                FROM listings
+                ORDER BY found_at DESC
+                LIMIT ?
+                """,
+                (n,),
+            )
+            return await cursor.fetchall()
+
+    async def get_parser_cycle_info(self) -> dict[str, Any]:
+        """Latest parser event info: last_run, listings_found."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT description, created_at
+                FROM events
+                WHERE type = 'parser'
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            )
+            row = await cursor.fetchone()
+        if not row:
+            return {"last_run": None, "listings_found": None}
+
+        description, created_at = row
+        # Parse listings count from description like "city=... listings=N"
+        import re
+        match = re.search(r"listings=(\d+)", description or "")
+        listings_found = int(match.group(1)) if match else None
+        return {"last_run": created_at, "listings_found": listings_found, "description": description}
 
 
 def _extract_area_from_title(title: str) -> float | None:

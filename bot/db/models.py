@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS users (
     area_max          REAL,
     daily_report_hour INTEGER,
     is_blocked        INTEGER DEFAULT 0,
+    is_paused         INTEGER DEFAULT 0,
     -- geo / radius filter
     location_lat      REAL,
     location_lon      REAL,
@@ -74,10 +75,11 @@ CREATE TABLE IF NOT EXISTS blocked_listings (
 );
 
 CREATE TABLE IF NOT EXISTS saved_searches (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id       INTEGER,
-    listing_id    TEXT,
-    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id          INTEGER,
+    listing_id       TEXT,
+    price_last_seen  INTEGER,
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS user_listing_notifications (
@@ -147,11 +149,13 @@ async def init_db(db_path: str) -> None:
 
     # Migrations: add columns that may be absent in existing DBs
     _migrations = [
-        ("users",    "location_lat",     "REAL"),
-        ("users",    "location_lon",     "REAL"),
-        ("users",    "radius_km",        "INTEGER"),
-        ("listings", "lat",              "REAL"),
-        ("listings", "lon",              "REAL"),
+        ("users",          "location_lat",      "REAL"),
+        ("users",          "location_lon",      "REAL"),
+        ("users",          "radius_km",         "INTEGER"),
+        ("listings",       "lat",               "REAL"),
+        ("listings",       "lon",               "REAL"),
+        ("users",          "is_paused",         "INTEGER DEFAULT 0"),
+        ("saved_searches", "price_last_seen",   "INTEGER"),
     ]
     async with aiosqlite.connect(db_path) as db:
         for table, column, col_type in _migrations:

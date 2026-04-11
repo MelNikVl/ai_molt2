@@ -12,12 +12,85 @@ from __future__ import annotations
 import logging
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery
+from aiogram.filters import Command
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from bot.db import queries
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+_FAV_PAGE_SIZE = 5
+
+
+def _build_fav_keyboard(page: int, total: int) -> InlineKeyboardMarkup | None:
+    """Build pagination keyboard for favorites."""
+    buttons = []
+    if page > 0:
+        buttons.append(InlineKeyboardButton(text="← Назад", callback_data=f"fav_page:{page - 1}"))
+    if (page + 1) * _FAV_PAGE_SIZE < total:
+        buttons.append(InlineKeyboardButton(text="Далее →", callback_data=f"fav_page:{page + 1}"))
+    if not buttons:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+
+async def _send_favorites_page(
+    message: Message, db_path: str, user_id: int, page: int
+) -> None:
+    total = await queries.count_favorites(db_path, user_id)
+    if total == 0:
+        await message.answer("У вас нет избранных объявлений.")
+        return
+
+    offset = page * _FAV_PAGE_SIZE
+    listings = await queries.get_favorites_paginated(
+        db_path, user_id, offset=offset, limit=_FAV_PAGE_SIZE
+    )
+
+    lines = [f"<b>❤️ Избранное</b> (стр. {page + 1}, всего {total}):\n"]
+    for lst in listings:
+        price = lst.get("price") or 0
+        price_str = f"{price:,} ₸".replace(",", "\u2009")
+        address = lst.get("address") or lst.get("title") or "—"
+        url = lst.get("url") or ""
+        lines.append(f"• <b>{price_str}</b> — {address}\n  <a href='{url}'>Открыть</a>")
+
+    kb = _build_fav_keyboard(page, total)
+    await message.answer(
+        "\n".join(lines),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+        reply_markup=kb,
+    )
+
+
+@router.message(Command("favorites"))
+async def cmd_favorites(message: Message, db_path: str) -> None:
+    user_id = message.from_user.id if message.from_user else None
+    if not user_id:
+        return
+    await _send_favorites_page(message, db_path, user_id, page=0)
+
+
+@router.callback_query(F.data.startswith("fav_page:"))
+async def cb_fav_page(callback: CallbackQuery, db_path: str) -> None:
+    user_id = callback.from_user.id if callback.from_user else None
+    if not user_id:
+        await callback.answer()
+        return
+    try:
+        page = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer()
+        return
+    await _send_favorites_page(callback.message, db_path, user_id, page=page)
+    await callback.answer()
 
 
 # ── Favorite ──────────────────────────────────────────────────────────────────
