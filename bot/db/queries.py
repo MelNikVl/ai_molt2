@@ -61,16 +61,18 @@ async def save_user_prefs(db_path: str, user_id: int, prefs: dict[str, Any]) -> 
         await db.execute(
             """
             UPDATE users
-            SET deal_type  = ?,
-                city       = ?,
-                district   = ?,
-                budget_min = ?,
-                budget_max = ?,
-                rooms      = ?,
-                area_min   = ?,
-                move_in    = ?,
-                priorities = ?,
-                updated_at = ?
+            SET deal_type     = ?,
+                city          = ?,
+                district      = ?,
+                budget_min    = ?,
+                budget_max    = ?,
+                rooms         = ?,
+                area_min      = ?,
+                move_in       = ?,
+                priorities    = ?,
+                owner_only    = ?,
+                property_type = ?,
+                updated_at    = ?
             WHERE user_id = ?
             """,
             (
@@ -83,6 +85,8 @@ async def save_user_prefs(db_path: str, user_id: int, prefs: dict[str, Any]) -> 
                 prefs.get("area_min"),
                 prefs.get("move_in"),
                 priorities,
+                prefs.get("owner_only"),       # 1, 0, or None
+                prefs.get("property_type"),    # 'new', 'secondary', or None
                 now,
                 user_id,
             ),
@@ -406,6 +410,45 @@ async def set_user_paused(db_path: str, user_id: int, paused: bool) -> None:
             (1 if paused else 0, user_id),
         )
         await db.commit()
+
+
+# ── Recent listings matching user filters ─────────────────────────────────────
+
+async def get_recent_listings_for_user(
+    db_path: str,
+    city: str | None,
+    deal_type: str | None,
+    budget_max: int | None,
+    n: int = 5,
+) -> list[dict[str, Any]]:
+    """Return the n most recent listings from the listings table matching user's filters."""
+    conditions: list[str] = []
+    params: list[Any] = []
+    if city:
+        conditions.append("l.city = ?")
+        params.append(city)
+    if deal_type:
+        conditions.append("l.deal_type = ?")
+        params.append(deal_type)
+    if budget_max and budget_max > 0:
+        conditions.append("l.price <= ?")
+        params.append(budget_max)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.append(n)
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            f"""
+            SELECT l.id, l.title, l.price, l.address, l.url, l.found_at
+            FROM listings l
+            {where}
+            ORDER BY l.found_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
 
 
 # ── Last sent listings ────────────────────────────────────────────────────────

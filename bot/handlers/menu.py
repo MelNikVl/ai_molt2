@@ -118,24 +118,56 @@ async def menu_restart(message: Message, state: FSMContext, db_path: str) -> Non
 
 @router.message(F.text == "🗺 Последние на карте")
 async def menu_last_on_map(message: Message, db_path: str) -> None:
+    from urllib.parse import quote
+
     if not message.from_user:
         return
-    listings = await queries.get_last_sent_listings(db_path, message.from_user.id, n=5)
-    if not listings:
+
+    user = await queries.get_user(db_path, message.from_user.id)
+    if not user or not user.get("deal_type"):
         await message.answer(
-            "У вас пока нет отправленных объявлений.",
+            "Настройте фильтры поиска командой /start.",
             reply_markup=MAIN_MENU,
         )
         return
 
-    lines = ["🗺 <b>Последние объявления:</b>\n"]
+    listings = await queries.get_recent_listings_for_user(
+        db_path,
+        city=user.get("city"),
+        deal_type=user.get("deal_type"),
+        budget_max=user.get("budget_max"),
+        n=5,
+    )
+
+    if not listings:
+        await message.answer(
+            "Объявлений по вашим фильтрам пока не найдено. Бот пришлёт их, как только они появятся.",
+            reply_markup=MAIN_MENU,
+        )
+        return
+
+    lines = ["🗺 <b>Последние объявления по вашим фильтрам:</b>\n"]
     for item in listings:
         price = item.get("price") or 0
         price_str = f"{price:,}".replace(",", "\u2009")
-        address = item.get("address") or "адрес не указан"
+        address = item.get("address") or ""
         url = item.get("url") or ""
-        title = item.get("title") or "Объявление"
-        lines.append(f"• <b>{price_str} ₸</b> — {address}\n  <a href='{url}'>{title}</a>")
+        addr_display = address or "адрес не указан"
+
+        map_link = (
+            f"https://yandex.kz/maps/?text={quote(address)}"
+            if address else ""
+        )
+
+        line = f"• <b>{price_str} ₸</b> — {addr_display}"
+        links = []
+        if map_link:
+            links.append(f"<a href='{map_link}'>📍 На карте</a>")
+        if url:
+            links.append(f"<a href='{url}'>🔗 Объявление</a>")
+        if links:
+            line += "\n  " + "  ·  ".join(links)
+        lines.append(line)
 
     await message.answer(
         "\n".join(lines),
