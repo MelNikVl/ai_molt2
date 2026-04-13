@@ -161,7 +161,7 @@ async def _get_listing_coords(listing: Any, db_path: str) -> tuple[float, float]
 async def check_new_listings(bot: "Bot", db: "BotDB", config: "Config") -> None:
     """Fetch new listings for all active users and send notifications."""
     from bot.core.geo import within_radius
-    from bot.db.queries import find_similar_photo_hash, get_users_with_location
+    from bot.db.queries import get_users_with_location
     from bot.db import queries as q
 
     try:
@@ -203,16 +203,6 @@ async def check_new_listings(bot: "Bot", db: "BotDB", config: "Config") -> None:
             new_notifications_count = 0
 
             for listing in listings:
-                # Photo hash deduplication against DB
-                if listing.photo_hash:
-                    similar_id = await find_similar_photo_hash(config.db_path, listing.photo_hash)
-                    if similar_id and similar_id != listing.id:
-                        logger.debug(
-                            "Visual duplicate skipped: listing=%s similar_to=%s",
-                            listing.id, similar_id,
-                        )
-                        continue
-
                 await db.save_listing(listing, city=city, deal_type=deal_type)
 
                 for user in users:
@@ -379,12 +369,21 @@ async def check_price_changes(bot: "Bot", db_path: str) -> None:
 
 async def parser_loop(bot: "Bot", db: "BotDB", config: "Config") -> None:
     """Run check_new_listings in an infinite loop with adaptive random delay."""
+    import bot.state as _state
+
     while True:
+        # Check admin-controlled pause flag
+        if not _state.parser_enabled:
+            await asyncio.sleep(15)  # poll every 15 s while paused
+            continue
+
         max_empty = max(_empty_cycles.values(), default=0)
         if max_empty >= 3:
-            delay = random.randint(600, 1200)  # 10–20 min
+            delay = random.randint(600, 1200)  # 10–20 min adaptive slow-down
             logger.info("Adaptive: slowing to %ds (all groups quiet)", delay)
         else:
-            delay = random.randint(60, 300)  # 1–5 min
+            # Use admin-configured interval (defaults: 60–300 s)
+            delay = random.randint(_state.parse_interval_min, _state.parse_interval_max)
+
         await asyncio.sleep(delay)
         await check_new_listings(bot, db, config)

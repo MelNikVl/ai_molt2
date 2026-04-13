@@ -17,14 +17,12 @@ import logging
 import random
 import re
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 import httpx
 from bs4 import BeautifulSoup, Tag
-
-from bot.core.dedup import compute_image_hash
 
 if TYPE_CHECKING:
     from bot.config import Config
@@ -96,7 +94,7 @@ class Listing:
     photo_url: str | None
     url: str
     published_at: str
-    photo_hash: str | None = None
+    photo_urls: list = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict compatible with bot.core.cards.send_listing_card."""
@@ -108,27 +106,11 @@ class Listing:
             "district": self.district or None,
             "rooms": self.rooms,
             "photo_url": self.photo_url,
+            "photo_urls": self.photo_urls,
             "url": self.url,
             "published_at": self.published_at,
-            "photo_hash": self.photo_hash,
             "source": "krisha.kz",
         }
-
-
-_PHOTO_HASH_SEM = asyncio.Semaphore(5)
-
-
-async def _fetch_photo_hash(photo_url: str) -> str | None:
-    """Download image bytes and compute perceptual hash. Returns hex string or None."""
-    async with _PHOTO_HASH_SEM:
-        try:
-            async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=10.0, follow_redirects=True) as client:
-                resp = await client.get(photo_url)
-                if resp.status_code == 200:
-                    return compute_image_hash(resp.content)
-        except Exception as exc:
-            logger.debug("_fetch_photo_hash failed for %s: %s", photo_url, exc)
-    return None
 
 
 def _normalize_deal_type(deal_type: str) -> str:
@@ -177,6 +159,54 @@ def _full_url(href: str | None) -> str | None:
     return f"{BASE_URL}{href}"
 
 
+def _extract_photo_urls(card: Tag) -> list[str]:
+    """Extract up to 5 photo URLs from a listing card."""
+    photo_urls: list[str] = []
+
+    # Try JSON-encoded photo list in data attributes first
+    for attr in ("data-photos", "data-photo", "data-images"):
+        raw = card.get(attr)
+        if raw:
+            try:
+                import json
+                photos_list = json.loads(raw)
+                if isinstance(photos_list, list):
+                    for p in photos_list:
+                        if isinstance(p, str):
+                            full = _full_url(p)
+                        elif isinstance(p, dict):
+                            src = p.get("src") or p.get("url") or p.get("href") or ""
+                            full = _full_url(src) if src else None
+                        else:
+                            continue
+                        if full and len(photo_urls) < 5:
+                            photo_urls.append(full)
+            except Exception:
+                pass
+            if photo_urls:
+                break
+
+    if photo_urls:
+        return photo_urls
+
+    # Fall back to scraping all <img> tags in the card
+    _skip_keywords = ("placeholder", "noimage", "nophoto", "no-photo", "sprite", "icon", "logo")
+    for img in card.select("img"):
+        src = img.get("src") or img.get("data-src") or img.get("data-lazy-src") or img.get("data-original")
+        if not src:
+            continue
+        src_lower = src.lower()
+        if any(kw in src_lower for kw in _skip_keywords):
+            continue
+        full = _full_url(src)
+        if full and full not in photo_urls:
+            photo_urls.append(full)
+        if len(photo_urls) >= 5:
+            break
+
+    return photo_urls
+
+
 def _parse_card(card: Tag) -> Listing | None:
     link_tag = card.select_one("a.a-card__title") or card.select_one("a[href*='/a/show/']")
     listing_url = _full_url(link_tag.get("href") if link_tag else None)
@@ -199,11 +229,8 @@ def _parse_card(card: Tag) -> Listing | None:
     time_tag = card.select_one(".a-card__text-date") or card.select_one(".a-card__header-left")
     published_at = " ".join(time_tag.get_text(" ", strip=True).split()) if time_tag else ""
 
-    image_tag = card.select_one("img")
-    photo_url = None
-    if image_tag:
-        photo_url = image_tag.get("src") or image_tag.get("data-src")
-        photo_url = _full_url(photo_url) if photo_url else None
+    photo_urls = _extract_photo_urls(card)
+    photo_url = photo_urls[0] if photo_urls else None
 
     rooms = _extract_rooms(title)
 
@@ -220,6 +247,7 @@ def _parse_card(card: Tag) -> Listing | None:
         photo_url=photo_url,
         url=listing_url,
         published_at=published_at,
+        photo_urls=photo_urls,
     )
 
 
@@ -386,21 +414,5 @@ async def parse_krisha(
         listings.append(parsed)
         if limit and len(listings) >= limit:
             break
-
-    # Fetch photo hashes concurrently (max 5 at a time via semaphore)
-    urls_and_indices = [
-        (i, listing.photo_url)
-        for i, listing in enumerate(listings)
-        if listing.photo_url
-    ]
-    if urls_and_indices:
-        hashes = await asyncio.gather(
-            *[_fetch_photo_hash(url) for _, url in urls_and_indices],
-            return_exceptions=True,
-        )
-        for (i, _), hash_val in zip(urls_and_indices, hashes):
-            if isinstance(hash_val, str):
-                # dataclass with slots=True — use object.__setattr__ to set field
-                object.__setattr__(listings[i], "photo_hash", hash_val)
 
     return listings

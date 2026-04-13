@@ -161,6 +161,7 @@ async def init_db(db_path: str) -> None:
         ("saved_searches", "price_last_seen",   "INTEGER"),
         ("users",          "owner_only",         "INTEGER"),
         ("users",          "property_type",      "TEXT"),
+        ("listings",       "photo_urls",          "TEXT"),
     ]
     async with aiosqlite.connect(db_path) as db:
         for table, column, col_type in _migrations:

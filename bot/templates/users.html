@@ -2,7 +2,7 @@
 {% block content %}
 <div class="page-title">Пользователи <small>{{ users|length }} записей</small></div>
 
-<div class="tbl-wrap">
+<div class="tbl-wrap" style="overflow-x:auto">
 <table>
   <thead>
     <tr>
@@ -10,7 +10,13 @@
       <th>Username</th>
       <th>Роль</th>
       <th>Подписка до</th>
-      <th>Фильтры</th>
+      <th>Город</th>
+      <th>Тип</th>
+      <th>Бюджет</th>
+      <th>Площадь</th>
+      <th>Район</th>
+      <th>Продавец</th>
+      <th>Тип жилья</th>
       <th>Статус</th>
       <th>Действия</th>
     </tr>
@@ -18,29 +24,52 @@
   <tbody>
   {% for u in users %}
   <tr>
-    <td><code>{{ u[0] }}</code></td>
-    <td>{{ u[1] or "—" }}</td>
+    <td><code>{{ u.user_id }}</code></td>
+    <td>{{ u.username or "—" }}</td>
     <td>
-      {% if u[2] == 3 %}<span class="badge b">PRO 30д</span>
-      {% elif u[2] == 2 %}<span class="badge g">7д</span>
+      {% if u.role == 3 %}<span class="badge b">PRO 30д</span>
+      {% elif u.role == 2 %}<span class="badge g">7д</span>
       {% else %}<span class="badge y">1д</span>{% endif %}
     </td>
-    <td class="text-sm text-muted">{{ u[3][:10] if u[3] else "—" }}</td>
+    <td class="text-sm text-muted">{{ u.subscription_end[:10] if u.subscription_end else "—" }}</td>
+    <td class="text-sm">{{ u.city or "—" }}</td>
+    <td class="text-sm">
+      {% if u.deal_type == "rent" %}<span class="badge b">Аренда</span>
+      {% elif u.deal_type == "buy" %}<span class="badge g">Покупка</span>
+      {% else %}<span class="text-muted">—</span>{% endif %}
+    </td>
     <td class="text-sm text-muted">
-      {{ u[4] or "?" }} · {{ u[5] or "?" }}<br>
-      <span style="font-size:11px">{{ u[6] or "0" }}–{{ u[7] or "∞" }} ₸ · {{ u[8] or "—" }}-{{ u[9] or "—" }} м²</span>
+      {% if u.price_min or u.price_max %}
+        {{ u.price_min or "0" }}–{{ u.price_max or "∞" }} ₸
+      {% else %}—{% endif %}
+    </td>
+    <td class="text-sm text-muted">
+      {% if u.area_min or u.area_max %}
+        {{ u.area_min or "—" }}–{{ u.area_max or "∞" }} м²
+      {% else %}—{% endif %}
+    </td>
+    <td class="text-sm">{{ u.district or "—" }}</td>
+    <td class="text-sm">
+      {% if u.owner_only == 1 %}<span class="badge g">Хозяин</span>
+      {% elif u.owner_only == 0 %}<span class="badge b">Любой</span>
+      {% else %}<span class="text-muted">—</span>{% endif %}
+    </td>
+    <td class="text-sm">
+      {% if u.property_type == "new" %}<span class="badge y">Новостройка</span>
+      {% elif u.property_type == "secondary" %}<span class="badge b">Вторичка</span>
+      {% else %}<span class="text-muted">—</span>{% endif %}
     </td>
     <td>
-      {% if u[11] %}
+      {% if u.is_blocked %}
         <span class="badge r">🔒 Заблокирован</span>
       {% else %}
         <span class="badge g">✓ Активен</span>
       {% endif %}
     </td>
     <td>
-      <div class="flex gap" style="gap:6px">
-        <form method="post" action="/admin/users/extend">
-          <input type="hidden" name="user_id" value="{{ u[0] }}">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <form method="post" action="/admin/users/extend" style="display:inline">
+          <input type="hidden" name="user_id" value="{{ u.user_id }}">
           <select name="role" style="padding:4px 6px;font-size:12px;border-radius:6px">
             <option value="1">1д</option>
             <option value="2">7д</option>
@@ -48,19 +77,24 @@
           </select>
           <button type="submit" class="btn btn-ghost btn-sm">Продлить</button>
         </form>
-        <form method="post" action="/admin/users/block">
-          <input type="hidden" name="user_id" value="{{ u[0] }}">
-          <input type="hidden" name="blocked" value="{{ 0 if u[11] else 1 }}">
-          <button type="submit" class="btn btn-sm {% if u[11] %}btn-ghost{% else %}btn-danger{% endif %}">
-            {{ "Разблок." if u[11] else "Блок." }}
+        <form method="post" action="/admin/users/block" style="display:inline">
+          <input type="hidden" name="user_id" value="{{ u.user_id }}">
+          <input type="hidden" name="blocked" value="{{ 0 if u.is_blocked else 1 }}">
+          <button type="submit" class="btn btn-sm {% if u.is_blocked %}btn-ghost{% else %}btn-danger{% endif %}">
+            {{ "Разблок." if u.is_blocked else "Блок." }}
           </button>
+        </form>
+        <form method="post" action="/admin/users/delete" style="display:inline"
+              onsubmit="return confirm('Удалить пользователя {{ u.user_id }} и все его данные? Это нельзя отменить.')">
+          <input type="hidden" name="user_id" value="{{ u.user_id }}">
+          <button type="submit" class="btn btn-sm btn-danger">🗑 Удалить</button>
         </form>
       </div>
     </td>
   </tr>
   {% endfor %}
   {% if not users %}
-  <tr><td colspan="7" style="text-align:center;padding:40px;color:var(--muted)">Пользователей нет</td></tr>
+  <tr><td colspan="13" style="text-align:center;padding:40px;color:var(--muted)">Пользователей нет</td></tr>
   {% endif %}
   </tbody>
 </table>

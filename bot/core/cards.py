@@ -5,11 +5,16 @@ Builds Telegram message text and InlineKeyboardMarkup for a listing card.
 """
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.enums import ParseMode
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 
 from bot.core.scorer import score, top_positive_reasons
+
+logger = logging.getLogger(__name__)
 
 
 def _fmt_price(price: int | None, deal_type: str | None) -> str:
@@ -115,9 +120,9 @@ def build_card_text(listing: dict[str, Any], prefs: dict[str, Any] | None = None
 def build_card_keyboard(listing_id: str, url: str | None = None) -> InlineKeyboardMarkup:
     """Build the InlineKeyboardMarkup for a listing card."""
     contact_btn = (
-        InlineKeyboardButton(text="📞 Связаться", url=url)
+        InlineKeyboardButton(text="📞 Открыть на Krisha", url=url)
         if url
-        else InlineKeyboardButton(text="📞 Связаться", callback_data=f"contact:{listing_id}")
+        else InlineKeyboardButton(text="📞 Открыть на Krisha", callback_data=f"contact:{listing_id}")
     )
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -133,6 +138,24 @@ def build_card_keyboard(listing_id: str, url: str | None = None) -> InlineKeyboa
     )
 
 
+def _get_photo_urls(listing: dict[str, Any]) -> list[str]:
+    """Return resolved list of photo URLs from listing dict."""
+    raw = listing.get("photo_urls")
+    if raw:
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = []
+        if isinstance(raw, list):
+            urls = [u for u in raw if isinstance(u, str)][:5]
+            if urls:
+                return urls
+    # Fall back to single photo_url
+    single = listing.get("photo_url")
+    return [single] if single else []
+
+
 async def send_listing_card(
     bot: Any,
     chat_id: int,
@@ -141,25 +164,47 @@ async def send_listing_card(
 ) -> None:
     """
     Send a formatted listing card to the user.
-    Sends a photo with caption if photo_url is available, otherwise plain text.
-    Never raises — bad listing data is logged and skipped.
+
+    • >1 photos  → send_media_group (caption on first photo) + keyboard as follow-up
+    • 1 photo    → send_photo with caption + keyboard
+    • 0 photos   → plain text message with keyboard
+    Never raises — errors are logged and swallowed.
     """
-    import logging
-    from aiogram.enums import ParseMode
-
-    logger = logging.getLogger(__name__)
-
     try:
         text = build_card_text(listing, prefs)
         listing_url = listing.get("url") or None
         keyboard = build_card_keyboard(listing["id"], url=listing_url)
-        photo_url = listing.get("photo_url")
+        photo_urls = _get_photo_urls(listing)
 
-        if photo_url:
+        if len(photo_urls) > 1:
+            media = [
+                InputMediaPhoto(
+                    media=photo_urls[0],
+                    caption=text,
+                    parse_mode=ParseMode.HTML,
+                )
+            ] + [InputMediaPhoto(media=url) for url in photo_urls[1:]]
+            try:
+                await bot.send_media_group(chat_id=chat_id, media=media)
+                # Keyboard must be a separate message — media groups don't support reply_markup
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text="👆 Подробнее на Krisha.kz:",
+                    reply_markup=keyboard,
+                )
+                return
+            except Exception as exc:
+                logger.debug(
+                    "send_media_group failed for listing %s: %s — falling back to single photo",
+                    listing.get("id"), exc,
+                )
+                photo_urls = photo_urls[:1]
+
+        if photo_urls:
             try:
                 await bot.send_photo(
                     chat_id=chat_id,
-                    photo=photo_url,
+                    photo=photo_urls[0],
                     caption=text,
                     reply_markup=keyboard,
                     parse_mode=ParseMode.HTML,
@@ -168,7 +213,7 @@ async def send_listing_card(
             except Exception as exc:
                 logger.debug("Failed to send photo for listing %s: %s", listing.get("id"), exc)
 
-        # Fallback: text-only card (URL available via "Связаться" inline button)
+        # Fallback: text-only card (URL available via inline button)
         await bot.send_message(
             chat_id=chat_id,
             text=text,
