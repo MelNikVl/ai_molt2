@@ -12,6 +12,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+import bot.state as _state
 from bot.db.compat import BotDB
 
 _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
@@ -49,7 +50,14 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             return RedirectResponse(url="/admin/login", status_code=302)
         stats = await db.get_dashboard_stats()
         return templates.TemplateResponse(
-            "dashboard.html", {"request": request, "stats": stats, "bot_version": bot_version}
+            "dashboard.html", {
+                "request": request,
+                "stats": stats,
+                "bot_version": bot_version,
+                "parser_enabled": _state.parser_enabled,
+                "parse_interval_min": _state.parse_interval_min,
+                "parse_interval_max": _state.parse_interval_max,
+            }
         )
 
     @app.get("/admin/users", response_class=HTMLResponse)
@@ -73,6 +81,14 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             return RedirectResponse(url="/admin/login", status_code=302)
         await db.set_user_blocked(user_id, bool(blocked))
         await db.log_event("block", f"admin-panel block={blocked} user={user_id}")
+        return RedirectResponse(url="/admin/users", status_code=302)
+
+    @app.post("/admin/users/delete")
+    async def delete_user(request: Request, user_id: int = Form(...)):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        await db.delete_user_cascade(user_id)
+        await db.log_event("delete", f"admin-panel delete user={user_id}")
         return RedirectResponse(url="/admin/users", status_code=302)
 
     @app.get("/admin/subscriptions", response_class=HTMLResponse)
@@ -102,6 +118,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         if not is_authed(request):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         stats = await db.get_dashboard_stats()
+        stats["parser_enabled"] = _state.parser_enabled
+        stats["parse_interval_min"] = _state.parse_interval_min
+        stats["parse_interval_max"] = _state.parse_interval_max
         return JSONResponse(stats)
 
     @app.get("/admin/logs/data")
@@ -170,5 +189,34 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "last_listings": last_listings,
             },
         )
+
+    # ── Parser controls ────────────────────────────────────────────────────────
+
+    @app.post("/admin/parser/toggle")
+    async def parser_toggle(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        _state.parser_enabled = not _state.parser_enabled
+        status = "enabled" if _state.parser_enabled else "disabled"
+        await db.log_event("parser_control", f"admin toggled parser {status}")
+        return RedirectResponse(url="/admin", status_code=302)
+
+    @app.post("/admin/parser/interval")
+    async def parser_interval(
+        request: Request,
+        interval_min: int = Form(...),
+        interval_max: int = Form(...),
+    ):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        interval_min = max(60, min(interval_min, 1200))
+        interval_max = max(interval_min, min(interval_max, 1200))
+        _state.parse_interval_min = interval_min
+        _state.parse_interval_max = interval_max
+        await db.log_event(
+            "parser_control",
+            f"admin set interval min={interval_min} max={interval_max}",
+        )
+        return RedirectResponse(url="/admin", status_code=302)
 
     return app

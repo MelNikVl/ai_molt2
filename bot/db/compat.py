@@ -154,12 +154,18 @@ class BotDB:
         return row is not None
 
     async def save_listing(self, listing: Any, city: str, deal_type: str) -> None:
+        import json as _json
         area = _extract_area_from_title(listing.title)
+        photo_url = getattr(listing, "photo_url", None)
+        raw_photo_urls = getattr(listing, "photo_urls", [])
+        photo_urls_json = _json.dumps(raw_photo_urls or [], ensure_ascii=False)
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
-                INSERT OR IGNORE INTO listings(id, url, title, price, area, address, city, deal_type, found_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO listings
+                    (id, url, title, price, area, address, city, deal_type,
+                     photo_url, photo_urls, found_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     listing.id,
@@ -170,6 +176,8 @@ class BotDB:
                     listing.address,
                     city,
                     deal_type,
+                    photo_url,
+                    photo_urls_json,
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
@@ -281,20 +289,37 @@ class BotDB:
             "db_path": self.db_path,
         }
 
-    async def get_users_admin(self) -> list[tuple]:
+    async def get_users_admin(self) -> list[dict]:
         async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 """
                 SELECT user_id, username, role, subscription_end,
                        city, deal_type,
-                       budget_min as price_min, budget_max as price_max,
+                       budget_min AS price_min, budget_max AS price_max,
                        area_min, area_max,
+                       district, owner_only, property_type,
                        daily_report_hour, is_blocked
                 FROM users
                 ORDER BY created_at DESC
                 """
             )
-            return await cursor.fetchall()
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def delete_user_cascade(self, user_id: int) -> None:
+        """Delete all data for a user across every table."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM user_listings WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM user_listing_notifications WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM favorites WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM saved_searches WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM blocked_listings WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM listing_views WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM ai_cache WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM bot_requests WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM users WHERE user_id=?", (user_id,))
+            await db.commit()
 
     async def get_user_daily_listings(
         self, user_id: int, day_start_utc: datetime, day_end_utc: datetime

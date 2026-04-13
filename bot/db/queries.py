@@ -122,13 +122,18 @@ async def get_all_active_users(db_path: str) -> list[dict[str, Any]]:
 
 async def save_listing(db_path: str, listing: dict[str, Any]) -> None:
     sources = json.dumps(listing.get("sources", []), ensure_ascii=False)
+    raw_photo_urls = listing.get("photo_urls", [])
+    if isinstance(raw_photo_urls, str):
+        photo_urls_json = raw_photo_urls  # already serialised
+    else:
+        photo_urls_json = json.dumps(raw_photo_urls or [], ensure_ascii=False)
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
             """
             INSERT OR IGNORE INTO listings
               (id, url, title, price, area, rooms, floor, floors_total,
                address, district, city, deal_type, phone, complex_name,
-               photo_url, photo_hash, published_at, found_at, sources)
+               photo_url, photo_urls, published_at, found_at, sources)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
@@ -147,11 +152,37 @@ async def save_listing(db_path: str, listing: dict[str, Any]) -> None:
                 listing.get("phone"),
                 listing.get("complex_name"),
                 listing.get("photo_url"),
-                listing.get("photo_hash"),
+                photo_urls_json,
                 listing.get("published_at"),
                 _now(),
                 sources,
             ),
+        )
+        await db.commit()
+
+
+async def reset_user_data(db_path: str, user_id: int) -> None:
+    """Cascade-delete all activity history and reset filter fields to NULL for a user."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("DELETE FROM user_listings WHERE user_id=?", (user_id,))
+        await db.execute("DELETE FROM user_listing_notifications WHERE user_id=?", (user_id,))
+        await db.execute("DELETE FROM favorites WHERE user_id=?", (user_id,))
+        await db.execute("DELETE FROM saved_searches WHERE user_id=?", (user_id,))
+        await db.execute("DELETE FROM blocked_listings WHERE user_id=?", (user_id,))
+        await db.execute("DELETE FROM listing_views WHERE user_id=?", (user_id,))
+        await db.execute("DELETE FROM ai_cache WHERE user_id=?", (user_id,))
+        await db.execute(
+            """
+            UPDATE users SET
+                deal_type=NULL, city=NULL, district=NULL,
+                budget_min=NULL, budget_max=NULL, rooms=NULL,
+                area_min=NULL, move_in=NULL, priorities=NULL,
+                owner_only=NULL, property_type=NULL,
+                location_lat=NULL, location_lon=NULL, radius_km=NULL,
+                updated_at=?
+            WHERE user_id=?
+            """,
+            (_now(), user_id),
         )
         await db.commit()
 

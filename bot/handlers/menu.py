@@ -6,11 +6,14 @@ Provides a persistent bottom menu for the bot with quick-access buttons.
 from __future__ import annotations
 
 import logging
+from urllib.parse import quote
 
 from aiogram import F, Router
-from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -69,7 +72,6 @@ async def menu_home(message: Message, db_path: str) -> None:
 
 @router.message(F.text == "📋 Мои фильтры")
 async def menu_my_filters(message: Message, db_path: str) -> None:
-    # Delegate to cmd_card logic
     from bot.handlers.start import _show_card
     await _show_card(message, db_path)
 
@@ -105,21 +107,61 @@ async def menu_resume(message: Message, db_path: str) -> None:
     )
 
 
-# ── 🔄 Настроить заново ───────────────────────────────────────────────────────
+# ── 🔄 Настроить заново — с подтверждением ───────────────────────────────────
 
 @router.message(F.text == "🔄 Настроить заново")
-async def menu_restart(message: Message, state: FSMContext, db_path: str) -> None:
+async def menu_restart(message: Message, db_path: str) -> None:
+    confirm_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да, сбросить", callback_data="reset:confirm"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="reset:cancel"),
+            ]
+        ]
+    )
+    await message.answer(
+        "⚠️ <b>Вы уверены?</b>\n\n"
+        "Это удалит все ваши фильтры и историю просмотров. "
+        "После сброса вы заново пройдёте настройку.",
+        parse_mode="HTML",
+        reply_markup=confirm_kb,
+    )
+
+
+@router.callback_query(F.data == "reset:confirm")
+async def cb_reset_confirm(callback: CallbackQuery, state: FSMContext, db_path: str) -> None:
+    if not callback.from_user or not callback.message:
+        await callback.answer()
+        return
+
+    user_id = callback.from_user.id
+
+    # Delete history and reset all filter fields
+    await queries.reset_user_data(db_path, user_id)
+
+    await callback.message.edit_text(
+        "✅ <b>Данные сброшены.</b> Запускаем настройку заново…",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+    # Restart onboarding
     from bot.handlers.start import _start_onboarding
     await state.clear()
-    await _start_onboarding(message, state, db_path)
+    await _start_onboarding(callback.message, state, db_path)
+
+
+@router.callback_query(F.data == "reset:cancel")
+async def cb_reset_cancel(callback: CallbackQuery) -> None:
+    if callback.message:
+        await callback.message.edit_text("❌ Сброс отменён.")
+    await callback.answer()
 
 
 # ── 🗺 Последние на карте ─────────────────────────────────────────────────────
 
 @router.message(F.text == "🗺 Последние на карте")
 async def menu_last_on_map(message: Message, db_path: str) -> None:
-    from urllib.parse import quote
-
     if not message.from_user:
         return
 
@@ -146,32 +188,35 @@ async def menu_last_on_map(message: Message, db_path: str) -> None:
         )
         return
 
-    lines = ["🗺 <b>Последние объявления по вашим фильтрам:</b>\n"]
+    city = user.get("city") or ""
+    city_name_map = {"astana": "Астана", "almaty": "Алматы"}
+    city_display = city_name_map.get(city.lower(), city.capitalize())
+
+    # Build one inline button per listing  (url → krisha.kz)
+    buttons: list[list[InlineKeyboardButton]] = []
     for item in listings:
         price = item.get("price") or 0
         price_str = f"{price:,}".replace(",", "\u2009")
-        address = item.get("address") or ""
+        address = item.get("address") or "адрес не указан"
         url = item.get("url") or ""
-        addr_display = address or "адрес не указан"
 
-        map_link = (
-            f"https://yandex.kz/maps/?text={quote(address)}"
-            if address else ""
-        )
+        label = f"📍 {address} — {price_str} ₸"
+        if len(label) > 64:
+            label = label[:61] + "…"
 
-        line = f"• <b>{price_str} ₸</b> — {addr_display}"
-        links = []
-        if map_link:
-            links.append(f"<a href='{map_link}'>📍 На карте</a>")
         if url:
-            links.append(f"<a href='{url}'>🔗 Объявление</a>")
-        if links:
-            line += "\n  " + "  ·  ".join(links)
-        lines.append(line)
+            buttons.append([InlineKeyboardButton(text=label, url=url)])
+
+    # Add city-level Yandex Maps button at the bottom
+    if city_display:
+        yandex_url = f"https://yandex.kz/maps/?text={quote(city_display + ' квартиры')}"
+        buttons.append([InlineKeyboardButton(text=f"🗺 {city_display} на Яндекс.Картах", url=yandex_url)])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
 
     await message.answer(
-        "\n".join(lines),
+        f"🗺 <b>Последние объявления по вашим фильтрам:</b>\n"
+        f"<i>Нажмите на кнопку, чтобы открыть объявление на Krisha.kz</i>",
         parse_mode="HTML",
-        disable_web_page_preview=True,
-        reply_markup=MAIN_MENU,
+        reply_markup=kb,
     )
